@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>عربية الإحضار — محاكي إسكندرية</title>
+  <meta name="theme-color" content="#0b1530">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;700;900&display=swap">
+  <link rel="stylesheet" href="css/style.css">
+  <script type="importmap">
+    { "imports": { "three": "./vendor/three.module.min.js" } }
+  </script>
+</head>
+<body>
+  <canvas id="game"></canvas>
+
+  <!-- القائمة الرئيسية -->
+  <div id="menu" class="overlay">
+    <div class="menu-card">
+      <span class="badge">تجريبي</span>
+      <h1>عربية الإحضار</h1>
+      <h2>محاكي سواقة في شوارع إسكندرية</h2>
+      <p id="centerName" class="center-name"></p>
+      <h3>اختار السواق</h3>
+      <div id="drivers" class="drivers"></div>
+      <button id="btnStart" class="btn primary">ابدأ الوردية ▶</button>
+      <div class="help">
+        <span>⬆️⬇️⬅️➡️ أو WASD: السواقة</span>
+        <span>Q: السارينة</span>
+        <span>H / Space: الكلاكس</span>
+        <span>C: الكاميرا</span>
+        <span>P: إيقاف مؤقت</span>
+        <span>M: الصوت</span>
+      </div>
+      <p class="best">أعلى نتيجة: <b id="bestScore">٠</b></p>
+    </div>
+  </div>
+
+  <!-- واجهة اللعب -->
+  <div id="hud" hidden>
+    <div class="hud-top-right">
+      <div class="brand"><b>عربية الإحضار</b><small>إسكندرية</small></div>
+      <div id="driverCard" class="driver-card"></div>
+      <div class="score-box"><small>النقاط</small><b id="score">٠</b></div>
+    </div>
+
+    <div class="mission">
+      <div id="objective" class="objective"></div>
+      <div id="missionInfo" class="mission-info" hidden>
+        <div id="missionCase" class="case"></div>
+        <div class="row"><span>⏱ <b id="timer"></b></span><span>📏 <b id="distance"></b></span></div>
+      </div>
+      <div id="comfortWrap" class="comfort" hidden>
+        <small>راحة الحالة</small>
+        <div class="bar"><div id="comfortBar"></div></div>
+      </div>
+      <div id="progress" class="progress" hidden>
+        <small id="progressLabel"></small>
+        <div class="bar"><div id="progressBar"></div></div>
+      </div>
+    </div>
+
+    <div class="hud-top-left">
+      <canvas id="minimap" width="190" height="190"></canvas>
+      <div id="district" class="district"></div>
+    </div>
+
+    <div class="speedo">
+      <b id="speed">٠</b><small>كم/س</small>
+      <div id="sirenState" class="siren-state">السارينة: مقفولة</div>
+    </div>
+
+    <div id="toast" class="toast"></div>
+    <div id="dialog" class="dialog" hidden></div>
+  </div>
+
+  <!-- تحكم اللمس -->
+  <div id="touch" hidden>
+    <div class="pad left">
+      <button data-key="left">◀</button>
+      <button data-key="right">▶</button>
+    </div>
+    <div class="pad right">
+      <button data-key="down" class="brake">فرامل</button>
+      <button data-key="up" class="gas">بنزين</button>
+    </div>
+    <div class="pad extra">
+      <button id="btnSiren">🚨</button>
+      <button id="btnHorn">📯</button>
+      <button id="btnCam">🎥</button>
+    </div>
+  </div>
+
+  <div id="pause" class="overlay" hidden>
+    <div class="menu-card small">
+      <h2>إيقاف مؤقت</h2>
+      <button id="btnResume" class="btn primary">كمّل</button>
+    </div>
+  </div>
+
+  <div id="summary" class="overlay" hidden>
+    <div class="menu-card small">
+      <h2>الحالة وصلت المركز ✅</h2>
+      <div id="sumStars" class="stars"></div>
+      <table id="sumRows" class="sum"></table>
+      <p id="sumTip" class="tip"></p>
+      <button id="btnNext" class="btn primary">البلاغ اللي بعده ▶</button>
+    </div>
+  </div>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
