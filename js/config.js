@@ -18,7 +18,7 @@ export const CONFIG = {
   // ---------- وضع إسكندرية الحقيقية (مباني جوجل 3D) ----------
   // حط مفتاح Google Maps API (لازم يكون مفعّل عليه Map Tiles API)
   // واقفله على الدومين بتاعك من Google Cloud Console (HTTP referrers)
-  googleMapsApiKey: '',
+  googleMapsApiKey: 'AIzaSyBfFuKLmpspUp6i8Vvuq4c5kCiWhJ8ynGE',
 
   real: {
     // مكان المركز — ⚠️ تقريبي، غيّره للإحداثيات الحقيقية من جوجل ماب
