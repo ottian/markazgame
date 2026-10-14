@@ -32,6 +32,22 @@
 ## العب أونلاين
 https://ottian.github.io/markazgame/
 
+## إسكندرية الحقيقية (مباني جوجل 3D)
+1. ادخل https://console.cloud.google.com واعمل مشروع وفعّل الفوترة (Billing) — جوجل بتدّي رصيد مجاني شهري.
+2. من **APIs & Services → Library** فعّل **Map Tiles API**.
+3. من **Credentials** اعمل **API key**، وتحت **Application restrictions** اختار **Websites** وضيف:
+   `https://ottian.github.io/*` و `http://localhost:*/*`
+   وتحت **API restrictions** اختار Map Tiles API بس.
+4. حط المفتاح في `js/config.js` في `googleMapsApiKey`.
+5. من القائمة اختار **الخريطة: إسكندرية الحقيقية**.
+
+⚠️ المفتاح بيبقى ظاهر في كود الصفحة — عشان كده لازم تقفله على الدومين بتاعك (خطوة ٣).
+⚠️ راجع شروط Google Maps Platform لاستخدام 3D Tiles، ولازم شعار/حقوق جوجل تفضل ظاهرة (اللعبة بتعرضها تحت).
+⚠️ الوضع ده تقيل — الأحسن على كمبيوتر. وفي النسخة دي: مفيش مرور ولا مشاة في الشوارع (محتاجين بيانات الشوارع من OpenStreetMap الأول).
+
+## شخصيات واقعية
+اقرا `assets/people/README.md`.
+
 ## التشغيل محليًا
 مفيش build. شغّل أي سيرفر static من فولدر المشروع:
 
@@ -49,4 +65,4 @@ python3 -m http.server 8080
 - **الخريطة والأحياء ومكان المركز:** `js/map.js`
 - **رسم المدينة:** `js/world.js` — **العربيات:** `js/vehicles.js` — **المرور:** `js/traffic.js`
 
-مكتبة الرسم: [three.js](https://threejs.org) r169 (موجودة في `vendor/`، رخصة MIT).
+مكتبة الرسم: [three.js](https://threejs.org) r169 (رخصة MIT) و[3d-tiles-renderer](https://github.com/NASA-AMMOS/3DTilesRendererJS) (رخصة Apache-2.0) — موجودين في `vendor/`.

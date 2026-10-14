@@ -88,7 +88,7 @@ function signTex(text, sub) {
   });
 }
 
-function makeSkyDome() {
+function makeSkyDome(day = false) {
   const geo = new THREE.SphereGeometry(1500, 32, 16);
   const mat = new THREE.ShaderMaterial({
     side: THREE.BackSide,
@@ -96,17 +96,18 @@ function makeSkyDome() {
     fog: false,
     uniforms: {},
     vertexShader: `varying vec3 vP; void main(){ vP = normalize(position); gl_Position = projectionMatrix*modelViewMatrix*vec4(position,1.0);} `,
+    defines: { DAY: day ? 1 : 0 },
     fragmentShader: `varying vec3 vP;
       void main(){
         float h = vP.y;
-        vec3 top = vec3(0.05,0.07,0.20);
-        vec3 mid = vec3(0.33,0.18,0.42);
-        vec3 hor = vec3(1.0,0.55,0.25);
+        vec3 top = (DAY == 1) ? vec3(0.18,0.38,0.75) : vec3(0.05,0.07,0.20);
+        vec3 mid = (DAY == 1) ? vec3(0.45,0.65,0.90) : vec3(0.33,0.18,0.42);
+        vec3 hor = (DAY == 1) ? vec3(0.80,0.86,0.92) : vec3(1.0,0.55,0.25);
         // الشمس غاربة في الغرب فوق البحر
         float sun = max(dot(vP, normalize(vec3(-0.75,0.08,-0.65))),0.0);
         vec3 c = mix(hor, mid, smoothstep(0.0,0.18,h));
         c = mix(c, top, smoothstep(0.18,0.7,h));
-        c += vec3(1.0,0.6,0.3)*pow(sun,40.0)*1.5 + vec3(1.0,0.45,0.2)*pow(sun,6.0)*0.35;
+        c += (DAY == 1) ? vec3(1.0,0.95,0.85)*pow(sun,200.0)*2.0 : vec3(1.0,0.6,0.3)*pow(sun,40.0)*1.5 + vec3(1.0,0.45,0.2)*pow(sun,6.0)*0.35;
         if(h<0.0) c = mix(hor*0.6, vec3(0.08,0.07,0.12), smoothstep(0.0,-0.2,h));
         gl_FragColor = vec4(c,1.0);
       }`,
@@ -118,7 +119,7 @@ function makeSkyDome() {
 
 export function buildWorld(scene, map, quality = { shadows: 0 }) {
   const rand = rng(7);
-  const sky = makeSkyDome();
+  const sky = makeSkyDome(!!quality.onlySky);
   scene.add(sky);
   scene.fog = new THREE.Fog(0x6a4a66, 120, 620);
 
@@ -135,6 +136,15 @@ export function buildWorld(scene, map, quality = { shadows: 0 }) {
     sun.shadow.normalBias = 0.4;
   }
   scene.add(sun, sun.target);
+  const follow = (x, z) => {
+    sun.target.position.set(x, 0, z);
+    sun.position.set(x + SUN_DIR.x * 200, SUN_DIR.y * 200, z + SUN_DIR.z * 200);
+  };
+  if (quality.onlySky) {
+    // وضع جوجل: المباني جاية من جوجل، إحنا بنعمل السما والنور بس
+    scene.fog = new THREE.Fog(0x9fb4c8, 600, 2200);
+    return { sky, follow, update(t, camPos) { sky.position.copy(camPos); } };
+  }
 
   // الأرض (رصيف)
   const ground = new THREE.Mesh(
@@ -461,10 +471,7 @@ export function buildWorld(scene, map, quality = { shadows: 0 }) {
     sky,
     sea,
     // الشمس بتمشي ورا اللاعب عشان الظل يفضل حواليه
-    follow(x, z) {
-      sun.target.position.set(x, 0, z);
-      sun.position.set(x + SUN_DIR.x * 200, SUN_DIR.y * 200, z + SUN_DIR.z * 200);
-    },
+    follow,
     update(t, camPos) {
       sky.position.copy(camPos);
       timeU.value = t;

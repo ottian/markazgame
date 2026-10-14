@@ -6,6 +6,7 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { TILE, COLS, ROWS, T, CENTER, DISTRICTS, buildMap, solidAt, tileAt, districtAt, tileCenter, randomPickup, sidewalkPaths, cornicheStanders, crossingAhead } from './map.js';
 import { buildWorld, makeMarker } from './world.js';
 import { People } from './people.js';
+import { Characters } from './characters.js';
 import { makeVan } from './vehicles.js';
 import { Traffic } from './traffic.js';
 import { Sfx } from './audio.js';
@@ -30,6 +31,12 @@ const isTouch = matchMedia('(pointer: coarse)').matches;
 let qKey = store.get('markaz_quality');
 if (!QUALITY[qKey]) qKey = isTouch ? 'low' : 'medium';
 const Q = QUALITY[qKey];
+Q.tileError = { low: 24, medium: 14, high: 8 }[qKey];
+
+// ---------- الوضع: خريطة اللعبة أو إسكندرية الحقيقية (جوجل 3D) ----------
+const hasGoogle = !!CONFIG.googleMapsApiKey;
+let modeKey = store.get('markaz_mode') === 'real' && hasGoogle ? 'real' : 'grid';
+const REAL = modeKey === 'real';
 
 // ---------- الإعداد ----------
 const canvas = $('game');
@@ -63,7 +70,12 @@ window.addEventListener('resize', resize);
 resize();
 
 const map = buildMap();
-const world = buildWorld(scene, map, Q);
+const world = buildWorld(scene, map, { ...Q, onlySky: REAL });
+let city = null;
+if (REAL) {
+  const { RealCity } = await import('./realcity.js');
+  city = new RealCity(scene, camera, renderer, Q);
+}
 const van = makeVan();
 scene.add(van);
 if (Q.shadows) {
@@ -73,8 +85,12 @@ if (Q.shadows) {
   head.target.position.set(15, 0, 0);
   van.add(head, head.target);
 }
-const traffic = new Traffic(scene, map.roads, Q.traffic);
-const people = new People(scene, { paths: sidewalkPaths(map), standers: cornicheStanders(), walkers: Q.peds, shadows: Q.shadows >= 2048 });
+const traffic = new Traffic(scene, REAL ? [] : map.roads, REAL ? 0 : Q.traffic);
+const people = REAL
+  ? new People(scene, { walkers: 0, shadows: !!Q.shadows })
+  : new People(scene, { paths: sidewalkPaths(map), standers: cornicheStanders(), walkers: Q.peds, shadows: Q.shadows >= 2048 });
+const characters = new Characters(scene, people, { low: 8, medium: 16, high: 28 }[qKey]);
+characters.load();
 const sfx = new Sfx();
 
 const pickupMarker = makeMarker(0xff8a1f);
@@ -82,7 +98,7 @@ const centerMarker = makeMarker(0x22e0a8);
 scene.add(pickupMarker, centerMarker);
 pickupMarker.visible = false;
 centerMarker.visible = false;
-const door = tileCenter(CENTER.doorCol, CENTER.doorRow);
+const door = REAL ? city.door : tileCenter(CENTER.doorCol, CENTER.doorRow);
 centerMarker.position.set(door.x, 0, door.z);
 
 // سهم فوق العربية بيشاور على الهدف
@@ -107,7 +123,10 @@ function avatarHTML(s, size = 48) {
 }
 
 // ---------- الحالة ----------
-const player = { x: door.x + 8, z: door.z + 3, heading: 0, speed: 0, steer: 0, siren: false };
+const player = REAL
+  ? { x: city.start.x, z: city.start.z, heading: city.start.heading, speed: 0, steer: 0, siren: false }
+  : { x: door.x + 8, z: door.z + 3, heading: 0, speed: 0, steer: 0, siren: false };
+let groundY = 0;
 const keys = {};
 let state = 'menu';
 let score = 0, missionsDone = 0;
@@ -184,6 +203,18 @@ function renderSettings() {
     b.onclick = () => { if (k !== qKey) { store.set('markaz_quality', k); location.reload(); } };
     box.appendChild(b);
   }
+  const mbox = $('modes');
+  mbox.innerHTML = '';
+  for (const [k, label] of [['grid', 'خريطة اللعبة'], ['real', 'إسكندرية الحقيقية (جوجل 3D)']]) {
+    const b = document.createElement('button');
+    b.className = 'chip' + (k === modeKey ? ' sel' : '');
+    b.textContent = label;
+    b.disabled = k === 'real' && !hasGoogle;
+    if (b.disabled) b.title = 'محتاج مفتاح Google Maps في js/config.js';
+    b.onclick = () => { if (k !== modeKey) { store.set('markaz_mode', k); location.reload(); } };
+    mbox.appendChild(b);
+  }
+  $('modeNote').hidden = hasGoogle;
   const v = $('voiceToggle');
   v.textContent = sfx.voice ? '🗣️ الكلام: شغّال' : '🗣️ الكلام: مقفول';
   v.classList.toggle('sel', sfx.voice);
@@ -227,6 +258,27 @@ function hideDialog() { $('dialog').hidden = true; dialogLine = -1; }
 
 // ---------- المهمّات ----------
 function newMission() {
+  if (REAL) {
+    const pk = city.pickupNear();
+    const kase = CONFIG.cases[Math.floor(Math.random() * CONFIG.cases.length)];
+    const route = Math.hypot(player.x - pk.pos.x, player.z - pk.pos.z) + Math.hypot(pk.pos.x - door.x, pk.pos.z - door.z);
+    mission = {
+      district: { name: pk.name }, tile: null, pos: pk.pos, kase,
+      limit: Math.round(route * 1.4 / 11 + 45 + kase.calm),
+      elapsed: 0, comfort: 100, hits: 0, calm: 0, handover: 0, aboard: false,
+    };
+    people.clearActors();
+    placePeople(null, pk.pos);
+    pickupMarker.position.set(pk.pos.x, groundY, pk.pos.z);
+    pickupMarker.visible = true;
+    centerMarker.visible = false;
+    sfx.radio();
+    toast(`📞 بلاغ جديد من ${pk.name}`, 5);
+    setTimeout(() => sfx.speak(`بلاغ جديد من ${pk.name}. ${kase.text}`), 700);
+    $('missionCase').textContent = kase.text;
+    state = 'playing';
+    return;
+  }
   const choices = DISTRICTS.filter((d) => d.key !== 'smouha');
   for (let tries = 0; tries < 20; tries++) {
     const d = choices[Math.floor(Math.random() * choices.length)];
@@ -258,13 +310,13 @@ function newMission() {
 function placePeople(p, pos) {
   // الناس واقفين على الرصيف ناحية المبنى
   const dirs = [[0, -1], [0, 1], [-1, 0], [1, 0]];
-  let d = dirs.find(([dc, dr]) => tileAt(map, p.c + dc, p.r + dr) === T.BUILDING) || [0, -1];
+  let d = (p && dirs.find(([dc, dr]) => tileAt(map, p.c + dc, p.r + dr) === T.BUILDING)) || [0, -1];
   const ox = pos.x + d[0] * 6.4, oz = pos.z + d[1] * 6.4;
   const side = [-d[1], d[0]];
   const faceRoad = Math.atan2(-d[1], -d[0]);
   cast = {
     spot: { x: ox, z: oz, faceRoad, side },
-    patient: people.addActor({ x: ox + side[0] * 0.7, z: oz + side[1] * 0.7, yaw: faceRoad, shirt: 0x7aa0c8, pants: 0x2b3245 }),
+    patient: people.addActor({ x: ox + side[0] * 0.7, z: oz + side[1] * 0.7, yaw: faceRoad, shirt: 0x7aa0c8, pants: 0x2b3245, role: 'patient' }),
     family: people.addActor({ x: ox - side[0] * 0.7, z: oz - side[1] * 0.7, yaw: faceRoad, shirt: 0x6a3a5a, pants: 0x6a3a5a, head: 0x3a2a3a }),
     family2: people.addActor({ x: ox - side[0] * 1.6, z: oz - side[1] * 1.6 + 0.3, yaw: faceRoad, shirt: 0xe6e1d3, pants: 0xe6e1d3 }),
   };
@@ -274,8 +326,8 @@ function placePeople(p, pos) {
 function teamOut() {
   const rx = player.x - Math.cos(player.heading) * 3.4, rz = player.z - Math.sin(player.heading) * 3.4;
   const s = cast.spot;
-  cast.doctor = people.addActor({ x: rx, z: rz, shirt: 0xf6f6f6, pants: 0x2b3245 });
-  cast.nurse = people.addActor({ x: rx + 0.5, z: rz + 0.5, shirt: 0x1f9a8a, pants: 0x1f9a8a });
+  cast.doctor = people.addActor({ x: rx, z: rz, shirt: 0xf6f6f6, pants: 0x2b3245, role: 'doctor' });
+  cast.nurse = people.addActor({ x: rx + 0.5, z: rz + 0.5, shirt: 0x1f9a8a, pants: 0x1f9a8a, role: 'nurse' });
   const fwd = [-s.side[1], s.side[0]];
   people.walkTo(cast.doctor, s.x + fwd[0] * 1.2 + s.side[0] * 0.2, s.z + fwd[1] * 1.2 + s.side[1] * 0.2, (a) => { a.yaw = Math.atan2(s.z - a.z, s.x - a.x); });
   people.walkTo(cast.nurse, s.x + fwd[0] * 1.2 + s.side[0] * 1.4, s.z + fwd[1] * 1.2 + s.side[1] * 1.4, (a) => { a.yaw = Math.atan2(s.z - a.z, s.x - a.x); });
@@ -312,13 +364,14 @@ function updateMission(dt) {
   const dist = Math.hypot(target.x - player.x, target.z - player.z);
   $('distance').textContent = `${toArabicDigits(Math.round(dist))} م`;
   const stopped = Math.abs(player.speed) < 1.5;
+  const zoneR = REAL ? 14 : 6.5;
 
   if (!m.aboard) {
     $('objective').textContent = `روح لـ ${m.district.name} (العلامة البرتقاني)`;
     if (m.boarding) {
       $('progressLabel').textContent = 'الحالة بتركب العربية...';
       if (!stopped || dist > 8) { people.clearActors(); finishBoarding(); }
-    } else if (dist < 6.5 && stopped) {
+    } else if (dist < zoneR && stopped) {
       if (!m.teamOut) { m.teamOut = true; teamOut(); }
       m.calm += dt;
       const frac = m.calm / m.kase.calm;
@@ -343,7 +396,7 @@ function updateMission(dt) {
     }
   } else {
     $('objective').textContent = `رجّع الحالة لـ ${CONFIG.centerShort} (العلامة الخضرا)`;
-    if (dist < 6.5 && stopped) {
+    if (dist < zoneR && stopped) {
       m.handover += dt;
       $('progress').hidden = false;
       $('progressBar').style.width = `${Math.min(100, (m.handover / 2.5) * 100)}%`;
@@ -448,7 +501,10 @@ function updatePlayer(dt) {
   const nx = player.x + Math.cos(newH) * player.speed * dt;
   const nz = player.z + Math.sin(newH) * player.speed * dt;
 
-  if (!blockedAt(nx, nz, newH)) {
+  if (REAL) {
+    if (!city.blocked(player.x, player.z, newH, player.speed)) { player.x = nx; player.z = nz; player.heading = newH; }
+    else { player.heading = newH; impact(); }
+  } else if (!blockedAt(nx, nz, newH)) {
     player.x = nx; player.z = nz; player.heading = newH;
   } else if (!blockedAt(nx, player.z, newH)) {
     player.x = nx; player.heading = newH; player.speed *= 0.9;
@@ -476,7 +532,7 @@ function updatePlayer(dt) {
     if (d < 3.6 && d > 0.001) {
       const push = 3.6 - d;
       const tx = player.x + (dx / d) * push, tz = player.z + (dz / d) * push;
-      if (!blockedAt(tx, tz, player.heading)) { player.x = tx; player.z = tz; }
+      if (REAL || !blockedAt(tx, tz, player.heading)) { player.x = tx; player.z = tz; }
       const p = Math.abs(player.speed);
       if (p > 2) {
         sfx.crash(p / 20);
@@ -509,7 +565,7 @@ function updatePlayer(dt) {
     }
   }
   people.crossCooldown -= dt;
-  if (people.crossCooldown <= 0 && player.speed > 5) {
+  if (!REAL && people.crossCooldown <= 0 && player.speed > 5) {
     const seg = crossingAhead(map, player.x, player.z, player.heading, 35 + Math.random() * 30);
     if (seg) { people.spawnCrossing(seg); people.crossCooldown = 7 + Math.random() * 8; }
     else people.crossCooldown = 1;
@@ -524,7 +580,8 @@ function updatePlayer(dt) {
     if (player.siren) { hurt(1.2 * dt); if (tipCooldown <= 0) { toast('🔇 السارينة بتوتّر الحالة — استخدمها في الزحمة بس', 3); tipCooldown = 8; } }
   }
 
-  van.position.set(player.x, 0, player.z);
+  if (REAL) { groundY = city.groundAt(player.x, player.z, dt); people.groundY = groundY; }
+  van.position.set(player.x, groundY, player.z);
   van.rotation.y = -player.heading;
   van.rotation.z = clamp(-player.speed * 0.0025 * (back ? -1 : fwd ? 1 : 0), -0.03, 0.03);
   for (const w of van.userData.wheels) w.rotation.z -= player.speed * dt / 0.42;
@@ -550,12 +607,13 @@ function updateCamera(dt) {
   camPos.lerp(want, 1 - Math.exp(-dt * 5));
   camLook.lerp(look, 1 - Math.exp(-dt * 8));
   camera.position.copy(camPos);
+  camera.position.y += groundY;
   if (shake > 0) {
     camera.position.x += (Math.random() - 0.5) * shake * 0.6;
     camera.position.y += (Math.random() - 0.5) * shake * 0.6;
     shake = Math.max(0, shake - dt * 2.5);
   }
-  camera.lookAt(camLook);
+  camera.lookAt(camLook.x, camLook.y + groundY, camLook.z);
 }
 
 // ---------- الخريطة الصغيرة ----------
@@ -575,6 +633,11 @@ mmBase.height = ROWS * MM_SCALE;
 const mm = $('minimap');
 const mmg = mm.getContext('2d');
 function drawMinimap() {
+  if (REAL) {
+    const target = mission ? (mission.aboard ? door : mission.pos) : null;
+    city.drawMinimap(mmg, mm.width, player, target);
+    return;
+  }
   const S = mm.width, half = S / 2;
   const k = MM_SCALE / TILE * 1.6; // بكسل لكل متر
   mmg.save();
@@ -624,7 +687,7 @@ const clock = new THREE.Clock();
 let t = 0, frames = 0;
 let pedsOnRoad = [];
 const vehiclesNear = [];
-let crowdCount = 0, crowdTimer = 0;
+let crowdCount = 0, crowdTimer = 0, attribTimer = 0;
 function step(dt) {
   t += dt;
 
@@ -632,7 +695,7 @@ function step(dt) {
     updatePlayer(dt);
     updateMission(dt);
   }
-  const isRoad = (x, z) => !solidAt(map, x, z);
+  const isRoad = REAL ? () => false : (x, z) => !solidAt(map, x, z);
   pedsOnRoad = people.onRoad(isRoad);
   if (state !== 'paused') {
     traffic.update(dt, player, pedsOnRoad);
@@ -649,8 +712,8 @@ function step(dt) {
   if (state === 'menu') {
     // كاميرا بتلف حوالين المركز في القائمة
     const a = t * 0.08;
-    camera.position.set(door.x + Math.cos(a) * 60, 28, door.z + Math.sin(a) * 60);
-    camera.lookAt(door.x, 6, door.z - 10);
+    camera.position.set(door.x + Math.cos(a) * 60, 28 + groundY + (REAL ? 60 : 0), door.z + Math.sin(a) * 60);
+    camera.lookAt(door.x, 6 + groundY, door.z - 10);
   } else updateCamera(dt);
 
   // سارينة
@@ -669,14 +732,14 @@ function step(dt) {
   const target = mission ? (mission.aboard ? door : mission.pos) : null;
   arrow.visible = !!target && state === 'playing' && camMode !== 1;
   if (target) {
-    arrow.position.set(player.x, 4.2 + Math.sin(t * 3) * 0.2, player.z);
+    arrow.position.set(player.x, groundY + 4.2 + Math.sin(t * 3) * 0.2, player.z);
     arrow.rotation.y = -Math.atan2(target.z - player.z, target.x - player.x);
   }
 
   if (state !== 'menu') {
     $('speed').textContent = toArabicDigits(Math.round(Math.abs(player.speed) * 3.6));
     $('score').textContent = toArabicDigits(score);
-    $('district').textContent = '📍 ' + districtAt(player.x).name;
+    $('district').textContent = '📍 ' + (REAL ? city.placeName(player.x, player.z) : districtAt(player.x).name);
     drawMinimap();
   }
   if (toastTimer > 0) {
@@ -691,8 +754,19 @@ function step(dt) {
   }
   const playing = state === 'playing';
   const skid = playing ? clamp(Math.abs(player.steer) * Math.abs(player.speed) / 18 - 0.55, 0, 1) + (keys.down && player.speed > 12 ? 0.6 : 0) : 0;
-  sfx.update(dt, { speed: playing ? player.speed : 0, throttle: playing && keys.up, siren: player.siren && playing, skid, seaDist: Math.max(0, player.z - 4 * TILE), crowd: crowdCount, active: playing });
+  sfx.update(dt, { speed: playing ? player.speed : 0, throttle: playing && keys.up, siren: player.siren && playing, skid, seaDist: REAL ? 999 : Math.max(0, player.z - 4 * TILE), crowd: crowdCount, active: playing });
   world.follow(player.x, player.z);
+  characters.update(dt, camera.position.x, camera.position.z, groundY);
+  if (REAL) {
+    city.update(player.x, player.z);
+    centerMarker.position.y = groundY;
+    if (city.error && !city.errorShown) {
+      city.errorShown = true;
+      toast('⚠️ مباني جوجل مش بتحمّل — اتأكد من المفتاح وإن Map Tiles API مفعّل', 8);
+    }
+    attribTimer -= dt;
+    if (attribTimer <= 0) { attribTimer = 2; $('attrib').textContent = 'Google · ' + city.attributions(); }
+  }
   world.update(t, camera.position);
 }
 function frame() {
@@ -705,4 +779,4 @@ function frame() {
 frame();
 
 // للاختبار من الكونسول
-window.__game = { people, get frames() { return frames; }, get t() { return t; }, player, get state() { return state; }, get mission() { return mission; }, startGame, newMission, step(n, dt = 1 / 30) { for (let i = 0; i < n; i++) step(dt); } };
+window.__game = { people, city, characters, get frames() { return frames; }, get t() { return t; }, player, get state() { return state; }, get mission() { return mission; }, startGame, newMission, step(n, dt = 1 / 30) { for (let i = 0; i < n; i++) step(dt); } };

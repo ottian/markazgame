@@ -83,6 +83,7 @@ export class People {
     this._r = new THREE.Matrix4();
     this._zero = new THREE.Matrix4().makeScale(0, 0, 0);
     this.crossCooldown = 4;
+    this.groundY = 0;
   }
 
   makePed(r, o) {
@@ -124,10 +125,10 @@ export class People {
   }
 
   // ---------- الممثلين (الفريق والحالة والأسرة) ----------
-  addActor({ x, z, yaw = 0, shirt, pants, head = null, skin }) {
+  addActor({ x, z, yaw = 0, shirt, pants, head = null, skin, role = null }) {
     const a = this.actorSlots.find((p) => !p.active);
     if (!a) return null;
-    Object.assign(a, { active: true, x, z, yaw, target: null, onArrive: null, walking: false, speed: 1.4 });
+    Object.assign(a, { active: true, x, z, yaw, target: null, onArrive: null, walking: false, speed: 1.4, role });
     a.colors = { skin: skin ?? pick(SKINS, Math.random), shirt, pants, head };
     a.headScale = head ? 1.25 : 1;
     this.applyColors();
@@ -208,7 +209,7 @@ export class People {
     const ms = this.meshes;
     this.peds.forEach((p, i) => {
       const far = (p.x - camX) ** 2 + (p.z - camZ) ** 2 > R2;
-      if (!p.active || far) {
+      if (!p.active || far || p.realistic) {
         for (const m of Object.values(ms)) m.setMatrixAt(i, this._zero);
         return;
       }
@@ -216,7 +217,7 @@ export class People {
       const swing = p.walking ? Math.sin(p.phase) * 0.6 : 0;
       const bob = p.walking ? Math.abs(Math.cos(p.phase)) * 0.04 : 0;
       B.makeRotationY(-p.yaw);
-      B.setPosition(p.x, bob, p.z);
+      B.setPosition(p.x, bob + this.groundY, p.z);
       if (p.scale !== 1) B.multiply(L.makeScale(p.scale, p.scale, p.scale));
       const put = (mesh, ox, oy, oz, rotZ, s = 1) => {
         L.makeRotationZ(rotZ);
