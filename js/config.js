@@ -8,10 +8,10 @@ export const CONFIG = {
   hotline: '',
 
   staff: [
-    { id: 'driver1', name: 'السواق ١', role: 'driver', title: 'سواق عربية الإحضار', photo: null },
-    { id: 'driver2', name: 'السواق ٢', role: 'driver', title: 'سواق عربية الإحضار', photo: null },
+    { id: 'driver1', name: 'خالد رضا', role: 'driver', title: 'سواق عربية الإحضار', photo: null },
+    { id: 'driver2', name: 'احمد عمرو', role: 'driver', title: 'سواق عربية الإحضار', photo: null },
     { id: 'doctor1', name: 'الدكتور', role: 'doctor', title: 'طبيب نفسي', photo: null },
-    { id: 'nurse1', name: 'الممرض', role: 'nurse', title: 'تمريض', photo: null },
+    { id: 'nurse1', name: 'محمد الحلواني', role: 'nurse', title: 'تمريض', photo: null },
     { id: 'social1', name: 'الأخصائي', role: 'social', title: 'أخصائي نفسي/اجتماعي', photo: null },
   ],
 
