@@ -274,4 +274,130 @@ export class Sfx {
       speechSynthesis.speak(u);
     } catch { /* المتصفح مش بيدعم */ }
   }
+
+  // ---------- مطر ورعد ونوارس ----------
+  setRain(v) {
+    if (!this.ctx) return;
+    if (!this.rainCh) this.rainCh = this.loop(this.white, 'bandpass', 3200, 0.5);
+    this.rainCh.gain.gain.setTargetAtTime(v * 0.22, this.ctx.currentTime, 0.4);
+  }
+
+  thunder() {
+    if (!this.ctx) return;
+    const src = this.ctx.createBufferSource();
+    src.buffer = this.brown;
+    const f = this.ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 180;
+    const g = this.ctx.createGain();
+    const t0 = this.ctx.currentTime;
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(0.9, t0 + 0.15);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + 3.5);
+    src.connect(f).connect(g).connect(this.master);
+    src.start(t0, Math.random());
+    src.stop(t0 + 3.6);
+  }
+
+  seagull(pan = 0) {
+    for (let i = 0; i < 3; i++) this.tone(1400 + Math.random() * 300, 0.18, { type: 'sine', vol: 0.05, pan, when: i * 0.22, slide: -500 });
+  }
+
+  // ---------- الراديو ----------
+  // ٠ مقفول، ١ موسيقى (مولّدة: عود + طبلة على مقام حجاز)، ٢ لاسلكي الكول سنتر
+  setRadio(mode) {
+    this.radio = mode;
+    if (this.ctx && mode === 1 && !this.musicBus) {
+      this.musicBus = this.ctx.createGain();
+      this.musicBus.gain.value = 0.35;
+      this.musicBus.connect(this.master);
+      this.nextBeat = this.ctx.currentTime + 0.1;
+      this.beat = 0;
+      this.melodyPos = 3;
+      this.strings = new Map();
+    }
+    if (this.musicBus) this.musicBus.gain.setTargetAtTime(mode === 1 ? 0.35 : 0, this.ctx.currentTime, 0.3);
+    this.chatterTimer = 4;
+  }
+
+  // وتر بطريقة Karplus-Strong (صوت قريب من العود)
+  pluck(freq, when, vol = 0.5) {
+    const key = Math.round(freq);
+    let buf = this.strings.get(key);
+    if (!buf) {
+      const sr = this.ctx.sampleRate, len = Math.floor(sr * 1.6), period = Math.round(sr / freq);
+      buf = this.ctx.createBuffer(1, len, sr);
+      const d = buf.getChannelData(0);
+      const ring = new Float32Array(period).map(() => Math.random() * 2 - 1);
+      for (let i = 0; i < len; i++) {
+        const j = i % period, n = (j + 1) % period;
+        d[i] = ring[j];
+        ring[j] = 0.996 * 0.5 * (ring[j] + ring[n]);
+      }
+      this.strings.set(key, buf);
+    }
+    const src = this.ctx.createBufferSource();
+    src.buffer = buf;
+    const g = this.ctx.createGain();
+    g.gain.value = vol;
+    src.connect(g).connect(this.musicBus);
+    src.start(when);
+  }
+
+  drum(kind, when) {
+    const g = this.ctx.createGain();
+    if (kind === 'doum') {
+      const o = this.ctx.createOscillator();
+      o.frequency.setValueAtTime(110, when);
+      o.frequency.exponentialRampToValueAtTime(55, when + 0.25);
+      g.gain.setValueAtTime(0.7, when);
+      g.gain.exponentialRampToValueAtTime(0.001, when + 0.35);
+      o.connect(g).connect(this.musicBus);
+      o.start(when); o.stop(when + 0.4);
+    } else {
+      const src = this.ctx.createBufferSource();
+      src.buffer = this.white;
+      const f = this.ctx.createBiquadFilter(); f.type = 'highpass'; f.frequency.value = 2500;
+      g.gain.setValueAtTime(kind === 'tak' ? 0.35 : 0.15, when);
+      g.gain.exponentialRampToValueAtTime(0.001, when + 0.07);
+      src.connect(f).connect(g).connect(this.musicBus);
+      src.start(when, Math.random()); src.stop(when + 0.08);
+    }
+  }
+
+  updateRadio(dt, chatterLines) {
+    if (!this.ctx || !this.radio) return;
+    if (this.radio === 1 && this.musicBus) {
+      // مقسوم: دُم تك - تك دُم - تك -
+      const RHYTHM = ['doum', 'tak', null, 'tak', 'doum', null, 'tak', 'ka'];
+      const D = 146.83; // ري
+      const HIJAZ = [1, 16 / 15, 5 / 4, 4 / 3, 3 / 2, 8 / 5, 16 / 9, 2, 32 / 15, 5 / 2];
+      const step = 60 / 104 / 2; // ثُمن
+      while (this.nextBeat < this.ctx.currentTime + 0.2) {
+        const b = this.beat % 8, t = this.nextBeat;
+        if (RHYTHM[b]) this.drum(RHYTHM[b], t);
+        // لحن: مشي عشوائي على المقام مع سكتات، وقفلة على الأساس كل ٤ موازير
+        if (this.beat % 32 === 31) this.melodyPos = 0;
+        if (Math.random() < 0.62) {
+          this.melodyPos = Math.max(0, Math.min(HIJAZ.length - 1, this.melodyPos + [-2, -1, -1, 0, 1, 1, 2][Math.floor(Math.random() * 7)]));
+          this.pluck(D * HIJAZ[this.melodyPos], t, 0.45);
+          if (b === 0) this.pluck(D / 2, t, 0.3); // قرار
+        }
+        this.nextBeat += step;
+        this.beat++;
+      }
+    } else if (this.radio === 2) {
+      this.chatterTimer -= dt;
+      if (this.chatterTimer <= 0) {
+        this.chatterTimer = 25 + Math.random() * 30;
+        this.radioBeep();
+        const line = chatterLines[Math.floor(Math.random() * chatterLines.length)];
+        setTimeout(() => this.speak(line, { pitch: 0.9, rate: 1.05 }), 500);
+      }
+    }
+  }
+
+  radioBeep() {
+    if (!this.ctx) return;
+    this.tone(1200, 0.08, { type: 'square', vol: 0.05 });
+    this.tone(900, 0.08, { type: 'square', vol: 0.05, when: 0.1 });
+  }
 }

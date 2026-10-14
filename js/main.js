@@ -7,7 +7,8 @@ import { TILE, COLS, ROWS, T, CENTER, DISTRICTS, buildMap, solidAt, tileAt, dist
 import { buildWorld, makeMarker } from './world.js';
 import { People } from './people.js';
 import { Characters } from './characters.js';
-import { makeVan } from './vehicles.js';
+import { makeVan, setNightLights } from './vehicles.js';
+import { DayNight, Weather } from './daynight.js';
 import { Traffic } from './traffic.js';
 import { Sfx } from './audio.js';
 import { CONFIG } from './config.js';
@@ -122,6 +123,27 @@ const people = REAL
   : new People(scene, { paths: sidewalkPaths(map), standers: cornicheStanders(), walkers: Q.peds, shadows: Q.shadows >= 2048 });
 const characters = new Characters(scene, people, { low: 8, medium: 16, high: 28 }[qKey]);
 characters.load();
+
+// ---------- اليوم والطقس ----------
+let savedHour = Number(store.get('markaz_hour'));
+const daynight = new DayNight(world, scene, Number.isFinite(savedHour) && savedHour > 0 ? savedHour : 16.5);
+const weatherMode = store.get('markaz_weather') || 'auto';
+const weather = new Weather(scene, weatherMode);
+daynight.listeners.push((n) => setNightLights(n));
+function registerNightMats() {
+  if (!osm) return;
+  for (const [k, m] of Object.entries(osm.facades)) daynight.addNight(m, k === 'shops' ? 0.25 : 0.04, k === 'shops' ? 1.1 : 0.95);
+  daynight.addNight(osm.furn.lampMat, 0.15, 3.5);
+}
+registerNightMats();
+
+// ---------- رتبة السواق ----------
+const RANKS = [
+  { xp: 0, name: 'سواق متدرّب' }, { xp: 1500, name: 'سواق' }, { xp: 4000, name: 'سواق خبرة' },
+  { xp: 9000, name: 'كبير السواقين' }, { xp: 18000, name: 'أسطى إسكندرية' },
+];
+let xp = Number(store.get('markaz_xp')) || 0;
+const rankOf = (v) => RANKS.filter((r) => v >= r.xp).pop();
 const sfx = new Sfx();
 
 const pickupMarker = makeMarker(0xff8a1f);
@@ -179,6 +201,8 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyH' || e.code === 'Space') { sfx.horn(); e.preventDefault(); }
   if (e.code === 'KeyC') camMode = (camMode + 1) % 3;
   if (e.code === 'KeyM') sfx.setMuted(!sfx.muted);
+  if (e.code === 'KeyR') cycleRadio();
+  if (mission && mission.choosing && ['Digit1', 'Digit2', 'Digit3'].includes(e.code)) chooseOption(Number(e.code.slice(-1)) - 1);
   if (e.code === 'KeyP' || e.code === 'Escape') togglePause();
   if (e.code === 'Enter' && state === 'menu') startGame();
   if (e.code === 'Enter' && state === 'summary') nextMission();
@@ -197,6 +221,14 @@ document.querySelectorAll('[data-key]').forEach((b) => {
 $('btnSiren').addEventListener('pointerdown', (e) => { e.preventDefault(); toggleSiren(); });
 $('btnHorn').addEventListener('pointerdown', (e) => { e.preventDefault(); sfx.horn(); });
 $('btnCam').addEventListener('pointerdown', (e) => { e.preventDefault(); camMode = (camMode + 1) % 3; });
+$('btnRadio').addEventListener('pointerdown', (e) => { e.preventDefault(); cycleRadio(); });
+let radioMode = 0;
+function cycleRadio() {
+  radioMode = (radioMode + 1) % 3;
+  sfx.setRadio(radioMode);
+  $('radioState').textContent = ['📻 الراديو: مقفول', '📻 موسيقى', '📻 لاسلكي المركز'][radioMode];
+  toast(['📻 الراديو اتقفل', '📻 موسيقى', '📻 لاسلكي المركز'][radioMode], 1.5);
+}
 
 function toggleSiren() {
   if (state === 'menu') return;
@@ -252,6 +284,15 @@ function renderSettings() {
   gt.textContent = gOn ? '🛰️ صور جوجل للأرض: شغّالة' : '🛰️ صور جوجل للأرض: مقفولة';
   gt.classList.toggle('sel', gOn);
   gt.onclick = () => { store.set('markaz_google', gOn ? '0' : '1'); location.reload(); };
+  const wbox = $('weatherChips');
+  wbox.innerHTML = '';
+  for (const [k, label] of [['auto', 'تلقائي'], ['clear', 'صحو'], ['rain', 'مطر'], ['storm', 'نوّة']]) {
+    const b = document.createElement('button');
+    b.className = 'chip' + (k === weatherMode ? ' sel' : '');
+    b.textContent = label;
+    b.onclick = () => { store.set('markaz_weather', k); location.reload(); };
+    wbox.appendChild(b);
+  }
   const v = $('voiceToggle');
   v.textContent = sfx.voice ? '🗣️ الكلام: شغّال' : '🗣️ الكلام: مقفول';
   v.classList.toggle('sel', sfx.voice);
@@ -263,12 +304,16 @@ $('centerName').textContent = CONFIG.centerName;
 $('bestScore').textContent = toArabicDigits(best);
 $('btnStart').addEventListener('click', startGame);
 
+function renderDriverCard() {
+  $('driverCard').innerHTML = `${avatarHTML(driver, 40)}<div><b>${driver.name}</b><small>${rankOf(xp).name} · ${toArabicDigits(xp)} خبرة</small></div>`;
+}
+
 function startGame() {
   sfx.init();
   $('menu').hidden = true;
   $('hud').hidden = false;
   if (isTouch) $('touch').hidden = false;
-  $('driverCard').innerHTML = `${avatarHTML(driver, 40)}<div><b>${driver.name}</b><small>${driver.title}</small></div>`;
+  renderDriverCard();
   state = 'playing';
   camPos.set(player.x - 11, 5, player.z);
   camLook.set(player.x + 8, 1.6, player.z);
@@ -307,7 +352,8 @@ function newMission() {
       if (nr && Math.hypot(nr.x - pos.x, nr.z - pos.z) < 150) pos = { x: nr.x, z: nr.z };
       pk = { pos, name: l.name };
     }
-    const kase = CONFIG.cases[Math.floor(Math.random() * CONFIG.cases.length)];
+    const pool = CONFIG.cases.filter((c) => !c.night || daynight.night > 0.5);
+    const kase = pool[Math.floor(Math.random() * pool.length)];
     const route = Math.hypot(player.x - pk.pos.x, player.z - pk.pos.z) + Math.hypot(pk.pos.x - door.x, pk.pos.z - door.z);
     mission = {
       district: { name: pk.name }, tile: null, pos: pk.pos, kase,
@@ -420,13 +466,19 @@ function updateMission(dt) {
       if (!stopped || dist > 8) { people.clearActors(); finishBoarding(); }
     } else if (dist < zoneR && stopped) {
       if (!m.teamOut) { m.teamOut = true; teamOut(); }
+      // قرار في نص المهمة
+      if (m.kase.choice && !m.chosen && m.calm / m.kase.calm > 0.35) {
+        if (!m.choosing) showChoice(m.kase.choice);
+        $('progressLabel').textContent = 'اختار هتتصرفوا إزاي (١ / ٢ / ٣)';
+        return;
+      }
       m.calm += dt;
-      const frac = m.calm / m.kase.calm;
+      const frac = m.calm / (m.kase.calm + (m.extraCalm || 0));
       $('progress').hidden = false;
       $('progressBar').style.width = `${Math.min(100, frac * 100)}%`;
       $('progressLabel').textContent = 'الفريق بيتكلم مع الحالة والأسرة...';
       const line = Math.min(2, Math.floor(frac * 3));
-      if (line !== dialogLine) {
+      if (line !== dialogLine && !(m.chosen && line === 1)) {
         dialogLine = line;
         if (line === 0) say(pick('doctor'), `مساء الخير، إحنا فريق ${CONFIG.centerShort}. خلّينا نتكلم بهدوء ونفهم محتاجين إيه.`);
         if (line === 1) say(pick('nurse'), 'متقلقش خالص، إحنا معاك خطوة بخطوة. خد نفس عميق.');
@@ -458,6 +510,32 @@ function updateMission(dt) {
   $('comfortBar').style.background = m.comfort > 70 ? '#3ad29f' : m.comfort > 40 ? '#f2c230' : '#ff5a4a';
 }
 
+function showChoice(ch) {
+  const m = mission;
+  m.choosing = true;
+  sfx.radioBeep();
+  const box = $('choice');
+  box.hidden = false;
+  box.innerHTML = `<p>${ch.prompt}</p>` + ch.options.map((o, i) => `<button data-i="${i}">${toArabicDigits(i + 1)}. ${o.text}</button>`).join('');
+  box.querySelectorAll('button').forEach((b) => { b.onclick = () => chooseOption(Number(b.dataset.i)); });
+  sfx.speak(ch.prompt);
+}
+
+function chooseOption(i) {
+  const m = mission;
+  const o = m && m.kase.choice && m.kase.choice.options[i];
+  if (!o || !m.choosing) return;
+  m.choosing = false;
+  m.chosen = true;
+  m.extraCalm = o.calm;
+  m.comfort = clamp(m.comfort + o.comfort, 0, 100);
+  m.choiceScore = o.score;
+  m.choiceText = o.text;
+  $('choice').hidden = true;
+  say(pick(o.role), o.reply);
+  toast(o.score > 0 ? '👍 قرار سليم' : '👎 القرار ده ضايق الحالة', 2.5);
+}
+
 function finishBoarding() {
   const m = mission;
   if (!m || m.aboard) return;
@@ -476,7 +554,16 @@ function finishMission() {
   const remain = Math.max(0, m.limit - m.elapsed);
   const timeBonus = Math.round(remain * 3);
   const comfortBonus = Math.round(m.comfort * 3);
-  const total = 150 + timeBonus + comfortBonus;
+  const choiceBonus = m.choiceScore || 0;
+  const hard = (daynight.night > 0.6 ? 0.2 : 0) + (weather.value > 0.3 ? 0.3 : 0);
+  const hardBonus = Math.round((150 + timeBonus + comfortBonus) * hard);
+  const total = Math.max(0, 150 + timeBonus + comfortBonus + choiceBonus + hardBonus);
+  const oldRank = rankOf(xp);
+  xp += total;
+  store.set('markaz_xp', String(xp));
+  const newRank = rankOf(xp);
+  if (newRank !== oldRank) setTimeout(() => { toast(`🎖️ اترقّيت: ${newRank.name}!`, 5); sfx.speak(`مبروك، اترقّيت ${newRank.name}`); }, 800);
+  renderDriverCard();
   score += total;
   missionsDone++;
   if (score > best) {
@@ -497,6 +584,8 @@ function finishMission() {
     <tr><td>الوقت (${remain > 0 ? 'بدري' : 'متأخر'})</td><td>${toArabicDigits(timeBonus)}</td></tr>
     <tr><td>راحة الحالة ${toArabicDigits(Math.round(m.comfort))}٪</td><td>${toArabicDigits(comfortBonus)}</td></tr>
     <tr><td>خبطات</td><td>${toArabicDigits(m.hits)}</td></tr>
+    ${m.choiceText ? `<tr><td>قرارك: ${m.choiceText}</td><td>${m.choiceScore < 0 ? '−' : ''}${toArabicDigits(Math.abs(m.choiceScore))}</td></tr>` : ''}
+    ${hardBonus ? `<tr><td>${daynight.night > 0.6 ? 'شغل ليل' : ''}${daynight.night > 0.6 && weather.value > 0.3 ? ' + ' : ''}${weather.value > 0.3 ? 'مطر' : ''}</td><td>${toArabicDigits(hardBonus)}</td></tr>` : ''}
     <tr class="tot"><td>المجموع</td><td>${toArabicDigits(total)}</td></tr>`;
   $('sumTip').textContent =
     m.comfort >= 85 ? 'سواقة ممتازة! الحالة وصلت مرتاحة ومطمّنة.' :
@@ -539,12 +628,12 @@ function updatePlayer(dt) {
   const MAX = 26, MAXR = -7;
   let sp = player.speed;
   if (fwd) sp += (sp < 0 ? 18 : 9 * (1 - sp / (MAX + 4))) * dt;
-  if (back) sp -= (sp > 0.5 ? 20 : 6) * dt;
+  if (back) sp -= (sp > 0.5 ? 20 * (1 - weather.value * 0.35) : 6) * dt;
   if (!fwd && !back) sp -= Math.sign(sp) * Math.min(Math.abs(sp), 2.5 * dt);
   sp -= sp * 0.08 * dt;
   player.speed = clamp(sp, MAXR, MAX);
 
-  const grip = clamp(Math.abs(player.speed) / 6, 0, 1) * (1 - 0.45 * clamp(Math.abs(player.speed) / MAX, 0, 1));
+  const grip = clamp(Math.abs(player.speed) / 6, 0, 1) * (1 - 0.45 * clamp(Math.abs(player.speed) / MAX, 0, 1)) * (1 - weather.value * 0.3);
   const newH = player.heading + player.steer * 1.7 * grip * Math.sign(player.speed) * dt;
   const nx = player.x + Math.cos(newH) * player.speed * dt;
   const nz = player.z + Math.sin(newH) * player.speed * dt;
@@ -736,7 +825,7 @@ const clock = new THREE.Clock();
 let t = 0, frames = 0;
 let pedsOnRoad = [];
 const vehiclesNear = [];
-let crowdCount = 0, crowdTimer = 0, attribTimer = 0, streetTimer = 0;
+let crowdCount = 0, crowdTimer = 0, attribTimer = 0, streetTimer = 0, gullTimer = 5, clockTimer = 0;
 
 // ---------- إسكندرية الحقيقية (OSM) ----------
 let osmSnapped = false, osmPedsVersion = -1, recycleTimer = 0, osmWait = 0;
@@ -853,6 +942,20 @@ function step(dt) {
     attribTimer -= dt;
     if (attribTimer <= 0) { attribTimer = 2; $('attrib').textContent = (osm ? '© OpenStreetMap contributors · ' : '') + 'Google · ' + city.attributions(); }
   }
+  daynight.rain = weather.value;
+  daynight.update(state === 'paused' ? 0 : dt);
+  weather.update(dt, camera.position, () => sfx.thunder());
+  if (weather.flash > 0) world.hemi.intensity += weather.flash * 4;
+  sfx.setRain(weather.value);
+  sfx.updateRadio(dt, CONFIG.chatter);
+  gullTimer -= dt;
+  if (gullTimer <= 0) {
+    gullTimer = 6 + Math.random() * 10;
+    const nearSea = REAL ? osm && osm.pointInSea(player.x, player.z - 60) : player.z < 9 * TILE;
+    if (nearSea && daynight.night < 0.5 && weather.value < 0.3 && state === 'playing') sfx.seagull(Math.random() * 2 - 1);
+  }
+  clockTimer -= dt;
+  if (clockTimer <= 0) { clockTimer = 0.5; $('clock').textContent = daynight.label(); store.set('markaz_hour', daynight.hour.toFixed(2)); }
   world.update(t, camera.position);
 }
 function frame() {

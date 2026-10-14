@@ -232,3 +232,9 @@ export function makeRandomTraffic(rand = Math.random) {
   if (r < 0.6) return makeTuktuk();
   return makeCar(CAR_COLORS[Math.floor(rand() * CAR_COLORS.length)]);
 }
+
+// نور العربيات بيقوى بالليل
+export function setNightLights(n) {
+  headMat.emissiveIntensity = 0.6 + n * 2.4;
+  tailMat.emissiveIntensity = 0.5 + n * 1.6;
+}

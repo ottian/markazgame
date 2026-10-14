@@ -126,6 +126,47 @@ export class OsmCity {
       this.centerSignTex.colorSpace = THREE.SRGBColorSpace;
     }
     this.centerInfo = null;
+    {
+      // أشكال العربيات الراكنة والقهاوي (متشاركة)
+      const box = (w, h, dd, x, y, z) => new THREE.BoxGeometry(w, h, dd).translate(x, y, z);
+      const wheelsGeo = [];
+      for (const [x, z] of [[1.3, 0.8], [1.3, -0.8], [-1.3, 0.8], [-1.3, -0.8]]) wheelsGeo.push(new THREE.CylinderGeometry(0.34, 0.34, 0.22, 10).rotateX(Math.PI / 2).translate(x, 0.34, z));
+      const merge = (geos) => {
+        let pos = [], nrm = [];
+        for (const g2 of geos) { const ng = g2.toNonIndexed(); pos.push(...ng.attributes.position.array); nrm.push(...ng.attributes.normal.array); }
+        const out = new THREE.BufferGeometry();
+        out.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+        out.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3));
+        return out;
+      };
+      const awnCv = document.createElement('canvas');
+      awnCv.width = 64; awnCv.height = 8;
+      const ag = awnCv.getContext('2d');
+      for (let i = 0; i < 8; i++) { ag.fillStyle = i % 2 ? '#f4efe2' : '#1f7a4a'; ag.fillRect(i * 8, 0, 8, 8); }
+      const awnTex = new THREE.CanvasTexture(awnCv);
+      awnTex.colorSpace = THREE.SRGBColorSpace;
+      this.lifeKit = {
+        carBody: box(4.2, 0.62, 1.78, 0, 0.62, 0),
+        carCabin: box(2.1, 0.5, 1.62, -0.25, 1.17, 0),
+        carRoof: box(2.0, 0.06, 1.56, -0.25, 1.45, 0),
+        carWheels: merge(wheelsGeo),
+        paint: new THREE.MeshStandardMaterial({ roughness: 0.35, metalness: 0.5 }),
+        glass: new THREE.MeshStandardMaterial({ color: 0x18222e, roughness: 0.1, metalness: 0.8 }),
+        tire: new THREE.MeshLambertMaterial({ color: 0x141414 }),
+        table: merge([box(0.8, 0.04, 0.8, 0, 0.75, 0), box(0.06, 0.75, 0.06, 0, 0.37, 0)]),
+        chair: merge([box(0.45, 0.05, 0.45, 0, 0.45, 0), box(0.05, 0.45, 0.45, -0.2, 0.7, 0), box(0.04, 0.45, 0.04, 0.2, 0.22, 0.2), box(0.04, 0.45, 0.04, 0.2, 0.22, -0.2)]),
+        seatedTorso: merge([box(0.28, 0.6, 0.42, -0.05, 0.85, 0), box(0.45, 0.16, 0.36, 0.2, 0.52, 0), box(0.14, 0.45, 0.32, 0.42, 0.25, 0)]),
+        head: new THREE.SphereGeometry(0.13, 10, 8).translate(-0.05, 1.32, 0),
+        awning: box(1.6, 0.06, 7.0, 0, 3.0, 0),
+        cat: merge([box(0.38, 0.16, 0.14, 0, 0.12, 0), new THREE.SphereGeometry(0.08, 8, 6).translate(0.22, 0.22, 0), box(0.25, 0.03, 0.03, -0.28, 0.2, 0)]),
+        metal: new THREE.MeshLambertMaterial({ color: 0x8a8f96 }),
+        plastic: new THREE.MeshLambertMaterial({ color: 0xd8d8d0 }),
+        cloth: new THREE.MeshLambertMaterial({ color: 0xffffff }),
+        skin: new THREE.MeshLambertMaterial({ color: 0xb98a64 }),
+        awningMat: new THREE.MeshLambertMaterial({ map: awnTex, side: THREE.DoubleSide }),
+        catMat: new THREE.MeshLambertMaterial({ color: 0xc08a4a }),
+      };
+    }
     this.seaMat = new THREE.MeshPhongMaterial({ color: 0x3a8cc4, emissive: 0x15466e, specular: 0x406080, shininess: 25, side: THREE.DoubleSide });
     {
       // درابزين الكورنيش: أعمدة بيضا وفراغات
@@ -203,6 +244,92 @@ export class OsmCity {
     const g = new THREE.Group();
     c.polys = [];
     c.roadsLocal = [];
+    // ---------- تكميل المباني الناقصة ----------
+    // OpenStreetMap ناقص فيه مباني كتير في إسكندرية: بنملا الأراضي الفاضية على الشوارع بعمارات شبه اللي حواليها
+    {
+      const v2i = this.index.version >= 2;
+      const roadsPre = d.r.map((r) => {
+        const [type, lanesTag, oneway] = r;
+        const lanes = lanesTag || (oneway ? (type <= 3 ? 2 : 1) : type <= 2 ? 4 : 2);
+        const w = type === 7 ? 5 : Math.max(lanes * (type <= 4 ? 3.3 : 2.9), type >= 6 ? 4 : 5.5);
+        return { type, w, p: this.pts(r, v2i ? 4 : 3) };
+      });
+      // شبكة لقطع الشوارع (عشان ما نبنيش فوق شارع)
+      const segGrid = new Map();
+      const CELL = 20;
+      for (const r of roadsPre) {
+        const p = r.p;
+        for (let i = 0; i < p.length - 2; i += 2) {
+          const seg = [p[i], p[i + 1], p[i + 2], p[i + 3], r.w / 2 + 2.8];
+          const x0 = Math.floor(Math.min(p[i], p[i + 2]) / CELL) - 1, x1 = Math.floor(Math.max(p[i], p[i + 2]) / CELL) + 1;
+          const z0 = Math.floor(Math.min(p[i + 1], p[i + 3]) / CELL) - 1, z1 = Math.floor(Math.max(p[i + 1], p[i + 3]) / CELL) + 1;
+          for (let x = x0; x <= x1; x++) for (let z = z0; z <= z1; z++) {
+            const k2 = x * 100003 + z;
+            if (!segGrid.has(k2)) segGrid.set(k2, []);
+            segGrid.get(k2).push(seg);
+          }
+        }
+      }
+      const onRoad = (x, z) => {
+        for (const [ax, az, bx, bz, hw] of segGrid.get(Math.floor(x / CELL) * 100003 + Math.floor(z / CELL)) || []) {
+          const dx = bx - ax, dz = bz - az, l2 = dx * dx + dz * dz || 1;
+          const u = Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / l2));
+          if ((ax + dx * u - x) ** 2 + (az + dz * u - z) ** 2 < hw * hw) return true;
+        }
+        return false;
+      };
+      // خلايا ٢ م مشغولة بالمباني الموجودة
+      const occ = new Set();
+      const mark = (x, z) => occ.add(Math.floor(x / 2) * 100003 + Math.floor(z / 2));
+      const taken = (x, z) => occ.has(Math.floor(x / 2) * 100003 + Math.floor(z / 2));
+      for (const b of d.b) {
+        const p = this.pts(b, 3);
+        let minx = Infinity, minz = Infinity, maxx = -Infinity, maxz = -Infinity;
+        for (let i = 0; i < p.length; i += 2) { minx = Math.min(minx, p[i]); maxx = Math.max(maxx, p[i]); minz = Math.min(minz, p[i + 1]); maxz = Math.max(maxz, p[i + 1]); }
+        for (let x = minx; x <= maxx + 1; x += 2) for (let z = minz; z <= maxz + 1; z += 2) mark(x, z);
+      }
+      const added = [];
+      for (const r of roadsPre) {
+        if (r.type < 3 || r.type > 6) continue;
+        const p = r.p;
+        let run = 0;
+        for (let i = 0; i < p.length - 2; i += 2) {
+          const ax = p[i], az = p[i + 1], bx = p[i + 2], bz = p[i + 3];
+          const len = Math.hypot(bx - ax, bz - az);
+          if (len < 12) { run += len; continue; }
+          const ux = (bx - ax) / len, uz = (bz - az) / len, rx = -uz, rz = ux;
+          for (const side of [1, -1]) {
+            let s = 3;
+            while (s < len - 6) {
+              const seed = hash(Math.round((ax + s) * 13) ^ Math.round(az * 7) ^ (side > 0 ? 77 : 33));
+              const W = 8 + seed * 7, D = 11 + hash(Math.round(s * 31) ^ Math.round(bx)) * 8;
+              if (s + W > len - 3) break;
+              const off = r.w / 2 + 2.9;
+              // ٤ أركان + نقط جوّه
+              const pt = (a, o) => [ax + ux * (s + a) + rx * side * (off + o), az + uz * (s + a) + rz * side * (off + o)];
+              let ok = true;
+              for (let a = 0; a <= W && ok; a += 2) for (let o = 0; o <= D && ok; o += 2) {
+                const [x, z] = pt(a, o);
+                if (taken(x, z) || onRoad(x, z) || x * x + z * z < 35 * 35 || this.pointInSea(x, z)) ok = false; // نسيب حوالين المركز فاضي
+              }
+              if (ok) {
+                const corners = [pt(0, 0), pt(W, 0), pt(W, D), pt(0, D)];
+                for (let a = 0; a <= W; a += 2) for (let o = 0; o <= D; o += 2) { const [x, z] = pt(a, o); mark(x, z); }
+                const floors = r.type <= 4 ? 6 + Math.floor(seed * 6) : 4 + Math.floor(seed * 6);
+                const entry = [0, floors, 1];
+                for (const [x, z] of corners) entry.push((x - this.shift.x) / this.unit, (z - this.shift.z) / this.unit);
+                added.push(entry);
+                s += W + 0.3;
+              } else s += 3;
+            }
+          }
+          run += len;
+        }
+      }
+      for (const e of added) d.b.push(e);
+      this.infilled = (this.infilled || 0) + added.length;
+    }
+
 
     // ---------- المباني ----------
     // كل خامة ليها مصفوفات: p (أماكن) n (اتجاهات) u (UV) c (ألوان)
@@ -392,7 +519,7 @@ export class OsmCity {
     // ---------- الشوارع ----------
     const asphalt = [], walk = [], white = [], yellow = [];
     const curbs = { p: [], u: [], n: [] }, plainCurbs = { p: [], u: [], n: [] };
-    const lamps = [], lights = [], signsOne = [], signsNo = [];
+    const lamps = [], lights = [], signsOne = [], signsNo = [], parked = [], cafes = [];
     const ribbon = (arr, p, offA, offB, y, from = 0, to = Infinity) => {
       // شريط أفقي بين إزاحتين (offA → offB) على طول الخط
       const n = p.length / 2;
@@ -549,6 +676,42 @@ export class OsmCity {
       if (type >= 2 && type <= 4 && L > 40) {
         for (const s of [5, L - 7]) for (let o = -w / 2 + 0.6; o < w / 2 - 0.4; o += 1.1) ribbon(white, p, o, o + 0.55, ym, s, s + 2.6);
       }
+      // عربيات راكنة نص على الرصيف (زي مصر بالظبط) + قهاوي على الرصيف
+      if (type >= 4 && type <= 6 && L > 24) {
+        for (const side of [1, -1]) {
+          for (const [a, b] of spans) {
+            let s = a + 8;
+            while (s < b - 8) {
+              const h = hash(Math.round(s * 17) ^ Math.round(p[0] * 3) ^ (side > 0 ? 5 : 9));
+              if (h > 0.4) {
+                const q = at(p, s);
+                const off = (w / 2 + 0.25) * side;
+                const x = q.x + -q.uz * off, z = q.z + q.ux * off;
+                const yaw = Math.atan2(q.uz, q.ux) + (h > 0.85 ? Math.PI : 0);
+                parked.push(x, z, yaw, h);
+                // للتصادم: مستطيل العربية
+                const cx = Math.cos(yaw), cz = Math.sin(yaw), hl = 2.1, hw = 0.9;
+                const poly = new Float32Array([x + cx * hl - cz * hw, z + cz * hl + cx * hw, x + cx * hl + cz * hw, z + cz * hl - cx * hw,
+                  x - cx * hl + cz * hw, z - cz * hl - cx * hw, x - cx * hl - cz * hw, z - cz * hl + cx * hw]);
+                c.polys.push({ p: poly, minx: x - 2.3, maxx: x + 2.3, minz: z - 2.3, maxz: z + 2.3 });
+              }
+              s += 6 + h * 4;
+            }
+          }
+        }
+      }
+      if (type >= 3 && type <= 6 && L > 40) {
+        for (const [a, b] of spans) {
+          for (let s = a + 15; s < b - 15; s += 55) {
+            const h = hash(Math.round(s * 29) ^ Math.round(p[1] * 7));
+            if (h > 0.3) continue;
+            const side = h < 0.15 ? 1 : -1;
+            const q = at(p, s);
+            const off = (w / 2 + 1.9) * side;
+            cafes.push(q.x + -q.uz * off, q.z + q.ux * off, Math.atan2(q.ux * side, -q.uz * side) + Math.PI, h);
+          }
+        }
+      }
       // أعمدة نور على الرصيف كل ٣٠ م، بالتبادل يمين وشمال
       if (type <= 4) {
         let side = 1;
@@ -602,6 +765,7 @@ export class OsmCity {
     vert(curbs, this.curbMat);
     vert(plainCurbs, this.plainCurbMat);
     this.furniture(g, lamps, lights, signsOne, signsNo);
+    this.life(g, parked, cafes);
     if (centerPoly) this.placeCenter(g, centerPoly);
 
     // ---------- الحدائق ----------
@@ -634,6 +798,78 @@ export class OsmCity {
     c.data = null;
     this.group.add(g);
     this.version++;
+  }
+
+  // عربيات راكنة + قهاوي (ترابيزات وكراسي وناس قاعدة وتندة) + قطط
+  life(g, parked, cafes) {
+    const L = this.lifeKit;
+    const d = new THREE.Object3D();
+    const col = new THREE.Color();
+    const CAR = [0xf2b705, 0x8a1c1c, 0x2a4a8a, 0xcfcfcf, 0x2b2b2b, 0x5a6b3a, 0xe8e8e8, 0x6a6f78, 0xf2b705, 0x9b7b4a];
+    const nP = parked.length / 4;
+    if (nP) {
+      const body = new THREE.InstancedMesh(L.carBody, L.paint, nP);
+      const cabin = new THREE.InstancedMesh(L.carCabin, L.glass, nP);
+      const roof = new THREE.InstancedMesh(L.carRoof, L.paint, nP);
+      const wheels = new THREE.InstancedMesh(L.carWheels, L.tire, nP);
+      for (let i = 0; i < nP; i++) {
+        d.position.set(parked[i * 4], 0.12, parked[i * 4 + 1]);
+        d.rotation.set(0, -parked[i * 4 + 2], 0.02);
+        d.updateMatrix();
+        for (const m of [body, cabin, roof, wheels]) m.setMatrixAt(i, d.matrix);
+        const ci = Math.floor(parked[i * 4 + 3] * 97) % CAR.length;
+        body.setColorAt(i, col.setHex(CAR[ci]));
+        roof.setColorAt(i, col.setHex(ci === 0 || ci === 8 ? 0x151515 : CAR[ci])); // التاكسي: سقف أسود
+      }
+      body.castShadow = roof.castShadow = true;
+      g.add(body, cabin, roof, wheels);
+    }
+    const nC = cafes.length / 4;
+    if (nC) {
+      const per = 3; // ترابيزات لكل قهوة
+      const tables = new THREE.InstancedMesh(L.table, L.metal, nC * per);
+      const chairs = new THREE.InstancedMesh(L.chair, L.plastic, nC * per * 2);
+      const torsos = new THREE.InstancedMesh(L.seatedTorso, L.cloth, nC * per * 2);
+      const heads = new THREE.InstancedMesh(L.head, L.skin, nC * per * 2);
+      const awnings = new THREE.InstancedMesh(L.awning, L.awningMat, nC);
+      const cats = new THREE.InstancedMesh(L.cat, L.catMat, nC);
+      const SHIRT = [0xe6e1d3, 0x2b4a7a, 0x3d6b4a, 0x6a4a8a, 0x8a5a2a, 0x222222, 0xb03a3a];
+      let t = 0, ch = 0;
+      for (let i = 0; i < nC; i++) {
+        const x = cafes[i * 4], z = cafes[i * 4 + 1], yaw = cafes[i * 4 + 2], h = cafes[i * 4 + 3];
+        const fx = Math.cos(yaw), fz = Math.sin(yaw), sx = -fz, sz = fx;
+        d.position.set(x - fx * 1.6, 0.2, z - fz * 1.6);
+        d.rotation.set(0, -yaw, 0);
+        d.scale.set(1, 1, 1);
+        d.updateMatrix();
+        awnings.setMatrixAt(i, d.matrix);
+        d.position.set(x + sx * 3.5 + fx * 0.6, 0.2, z + sz * 3.5 + fz * 0.6);
+        d.rotation.set(0, -yaw + h * 9, 0);
+        d.updateMatrix();
+        cats.setMatrixAt(i, d.matrix);
+        for (let k = 0; k < per; k++) {
+          const tx = x + sx * (k - 1) * 2.1, tz = z + sz * (k - 1) * 2.1;
+          d.position.set(tx, 0.2, tz); d.rotation.set(0, 0, 0); d.updateMatrix();
+          tables.setMatrixAt(t++, d.matrix);
+          for (const sd of [1, -1]) {
+            const cx2 = tx + sx * sd * 0.65, cz2 = tz + sz * sd * 0.65;
+            const face = Math.atan2(tz - cz2, tx - cx2);
+            d.position.set(cx2, 0.2, cz2); d.rotation.set(0, -face, 0); d.updateMatrix();
+            chairs.setMatrixAt(ch, d.matrix);
+            const sitting = hash(ch * 31 + Math.round(x)) < 0.7;
+            d.scale.setScalar(sitting ? 1 : 0);
+            d.updateMatrix();
+            torsos.setMatrixAt(ch, d.matrix);
+            heads.setMatrixAt(ch, d.matrix);
+            torsos.setColorAt(ch, col.setHex(SHIRT[ch % SHIRT.length]));
+            d.scale.setScalar(1);
+            ch++;
+          }
+        }
+      }
+      for (const m of [tables, chairs, torsos, heads, awnings]) m.castShadow = true;
+      g.add(tables, chairs, torsos, heads, awnings, cats);
+    }
   }
 
   // أعمدة نور، إشارات مرور، يافطات — كلها InstancedMesh

@@ -34,12 +34,16 @@
         <span>الجرافيكس:</span><div id="quality" class="chips"></div>
         <button id="voiceToggle" class="chip"></button>
       </div>
+      <div class="settings">
+        <span>الطقس:</span><div id="weatherChips" class="chips"></div>
+      </div>
       <button id="btnStart" class="btn primary">ابدأ الوردية ▶</button>
       <div class="help">
         <span>⬆️⬇️⬅️➡️ أو WASD: السواقة</span>
         <span>Q: السارينة</span>
         <span>H / Space: الكلاكس</span>
         <span>C: الكاميرا</span>
+        <span>R: الراديو</span>
         <span>P: إيقاف مؤقت</span>
         <span>M: الصوت</span>
       </div>
@@ -74,16 +78,19 @@
     <div class="hud-top-left">
       <canvas id="minimap" width="190" height="190"></canvas>
       <div id="district" class="district"></div>
+      <div id="clock" class="clock"></div>
     </div>
 
     <div class="speedo">
       <b id="speed">٠</b><small>كم/س</small>
       <div id="sirenState" class="siren-state">السارينة: مقفولة</div>
+      <div id="radioState" class="siren-state">📻 الراديو: مقفول</div>
     </div>
 
     <div id="toast" class="toast"></div>
     <div id="attrib" class="attrib"></div>
     <div id="dialog" class="dialog" hidden></div>
+    <div id="choice" class="choice" hidden></div>
   </div>
 
   <!-- تحكم اللمس -->
@@ -100,6 +107,7 @@
       <button id="btnSiren">🚨</button>
       <button id="btnHorn">📯</button>
       <button id="btnCam">🎥</button>
+      <button id="btnRadio">📻</button>
     </div>
   </div>
 

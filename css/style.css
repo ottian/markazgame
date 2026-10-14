@@ -84,6 +84,14 @@ h3 { margin: 18px 0 8px; font-size: 16px; color: var(--gold); }
 
 .hud-top-left { position: absolute; top: 12px; left: 12px; display: flex; flex-direction: column; align-items: center; gap: 6px; }
 #minimap { width: 170px; height: 170px; border-radius: 50%; border: 3px solid var(--gold); background: #1d4f7a; box-shadow: 0 4px 18px rgba(0, 0, 0, 0.5); }
+.clock { background: var(--panel); color: var(--text); font-weight: 700; padding: 2px 12px; border-radius: 20px; font-size: 13px; }
+.choice {
+  position: absolute; bottom: 120px; left: 50%; transform: translateX(-50%); width: min(560px, 92vw); pointer-events: auto;
+  background: var(--panel); border: 2px solid var(--gold); border-radius: 14px; padding: 12px; display: flex; flex-direction: column; gap: 8px;
+}
+.choice p { margin: 0 0 4px; font-weight: 900; }
+.choice button { font: inherit; text-align: right; background: rgba(255,255,255,0.08); color: var(--text); border: 1px solid rgba(255,255,255,0.2); border-radius: 10px; padding: 8px 12px; cursor: pointer; }
+.choice button:hover { background: rgba(242,194,48,0.25); }
 .district { background: var(--gold); color: #1a1200; font-weight: 900; padding: 2px 12px; border-radius: 20px; font-size: 13px; }
 
 .speedo {
