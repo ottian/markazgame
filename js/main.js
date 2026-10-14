@@ -75,7 +75,8 @@ const map = buildMap();
 const world = buildWorld(scene, map, { ...Q, onlySky: REAL });
 let city = null; // صور جوجل (الأرض)
 let osm = null; // مباني وشوارع OpenStreetMap
-const useGoogle = REAL && hasGoogle && store.get('markaz_google') !== '0';
+// صور جوجل للأرض مقفولة إلا لو اللاعب شغّلها (المدينة كلها مرسومة من الخريطة)
+const useGoogle = REAL && hasGoogle && (!hasOsm || store.get('markaz_google') === '1');
 let landmarks = [];
 if (REAL) {
   const R = await import('./realcity.js');
@@ -247,7 +248,7 @@ function renderSettings() {
   $('modeNote').hidden = canReal;
   const gt = $('googleToggle');
   gt.hidden = !(hasGoogle && hasOsm);
-  const gOn = store.get('markaz_google') !== '0';
+  const gOn = store.get('markaz_google') === '1';
   gt.textContent = gOn ? '🛰️ صور جوجل للأرض: شغّالة' : '🛰️ صور جوجل للأرض: مقفولة';
   gt.classList.toggle('sel', gOn);
   gt.onclick = () => { store.set('markaz_google', gOn ? '0' : '1'); location.reload(); };
@@ -738,12 +739,13 @@ const vehiclesNear = [];
 let crowdCount = 0, crowdTimer = 0, attribTimer = 0, streetTimer = 0;
 
 // ---------- إسكندرية الحقيقية (OSM) ----------
-let osmSnapped = false, osmPedsVersion = -1, recycleTimer = 0;
+let osmSnapped = false, osmPedsVersion = -1, recycleTimer = 0, osmWait = 0;
 function updateOsm(dt) {
   osm.update(player.x, player.z, qKey === 'high' ? 2 : 1);
+  osm.tick(t);
   // أول ما الشوارع حوالين المركز تحمّل: نحط باب المركز والعربية على أقرب شارع
-  if (!osmSnapped && osm.roads.length) {
-    const nr = osm.nearestRoad(0, 0, [2, 3, 4, 5, 6]);
+  if (!osmSnapped && osm.roads.length && (osm.centerInfo || osmWait++ > 240)) {
+    const nr = osm.centerInfo || osm.nearestRoad(0, 0, [2, 3, 4, 5, 6]);
     if (nr) {
       osmSnapped = true;
       door.x = nr.x; door.z = nr.z;

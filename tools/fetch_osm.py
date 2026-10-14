@@ -131,6 +131,37 @@ def fetch(on_progress=None):
     return {'elements': elements}
 
 
+def join_ways(ways):
+    ways = [list(w) for w in ways if len(w) >= 4]
+    starts = {}
+    for i, w in enumerate(ways):
+        starts.setdefault((w[0], w[1]), []).append(i)
+    used = [False] * len(ways)
+    ends = {}
+    for i, w in enumerate(ways):
+        ends.setdefault((w[-2], w[-1]), []).append(i)
+    chains = []
+    for i in range(len(ways)):
+        if used[i]:
+            continue
+        used[i] = True
+        chain = ways[i][:]
+        while True:  # لقدّام
+            nxt = [j for j in starts.get((chain[-2], chain[-1]), []) if not used[j]]
+            if not nxt:
+                break
+            used[nxt[0]] = True
+            chain += ways[nxt[0]][2:]
+        while True:  # لورا
+            prv = [j for j in ends.get((chain[0], chain[1]), []) if not used[j]]
+            if not prv:
+                break
+            used[prv[0]] = True
+            chain = ways[prv[0]][:-2] + chain
+        chains.append(chain)
+    return chains
+
+
 def main():
     def progress(osm, k, total):
         write(osm, f'{k}/{total}')
@@ -170,6 +201,7 @@ def write(osm, status):
         return ch
 
     counts = {'b': 0, 'r': 0, 'c': 0, 'p': 0}
+    coast_ways = []
     for el in osm.get('elements', []):
         geom = el.get('geometry')
         if not geom or len(geom) < 2:
@@ -200,6 +232,7 @@ def write(osm, status):
             ch['r'].append([ROAD_TYPES[tags['highway']], lanes, one, ni] + pts)
             counts['r'] += 1
         elif tags.get('natural') == 'coastline':
+            coast_ways.append(pts)
             put('c', pts, pts)
             counts['c'] += 1
         else:
@@ -213,6 +246,10 @@ def write(osm, status):
     for (cx, cz), c in chunks.items():
         with open(os.path.join(OUT, f'c_{cx}_{cz}.json'), 'w', encoding='utf-8') as f:
             json.dump(c, f, separators=(',', ':'), ensure_ascii=False)
+    # الساحل: نوصّل القطع ببعض لخطوط طويلة (اليابسة على شمال اتجاه الخط، البحر يمينه)
+    chains = join_ways(coast_ways)
+    with open(os.path.join(OUT, 'coast.json'), 'w', encoding='utf-8') as f:
+        json.dump({'chains': chains}, f, separators=(',', ':'))
     index = {
         'origin': {'lat': lat0, 'lon': lon0},
         'bbox': BBOX,

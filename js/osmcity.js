@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { makeFacadeSet } from './facades.js';
 import { makeRandomTraffic } from './vehicles.js';
 import { latLonToLocal } from './realcity.js';
+import { CONFIG } from './config.js';
 
 // إسكندرية الحقيقية من OpenStreetMap: مباني بأشكالها الحقيقية + شوارع + مرور + أرصفة
 // البيانات في data/osm (بتتولّد بـ tools/fetch_osm.py) — © OpenStreetMap contributors (ODbL)
@@ -26,7 +27,12 @@ export class OsmCity {
     const r = await fetch('data/osm/index.json');
     if (!r.ok) return null;
     const index = await r.json();
-    return new OsmCity(index, origin);
+    const city = new OsmCity(index, origin);
+    try {
+      const cr = await fetch('data/osm/coast.json');
+      if (cr.ok) city.buildCoast((await cr.json()).chains);
+    } catch { /* مفيش ساحل */ }
+    return city;
   }
 
   constructor(index, origin) {
@@ -41,11 +47,11 @@ export class OsmCity {
     this.group = new THREE.Group();
     this.facades = makeFacadeSet();
     this.roofMat = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide });
-    this.roadMat = new THREE.MeshLambertMaterial({ color: 0x3a3c42 });
-    this.walkMat = new THREE.MeshLambertMaterial({ color: 0xb9b3a8 });
-    this.parkMat = new THREE.MeshLambertMaterial({ color: 0x4a7a3a });
-    this.lineMat = new THREE.MeshBasicMaterial({ color: 0xeeeeea });
-    this.yellowMat = new THREE.MeshBasicMaterial({ color: 0xf2c230 });
+    this.roadMat = new THREE.MeshLambertMaterial({ color: 0x3a3c42, side: THREE.DoubleSide });
+    this.walkMat = new THREE.MeshLambertMaterial({ color: 0xb9b3a8, side: THREE.DoubleSide });
+    this.parkMat = new THREE.MeshLambertMaterial({ color: 0x4a7a3a, side: THREE.DoubleSide });
+    this.lineMat = new THREE.MeshBasicMaterial({ color: 0xeeeeea, side: THREE.DoubleSide });
+    this.yellowMat = new THREE.MeshBasicMaterial({ color: 0xf2c230, side: THREE.DoubleSide });
     this.domeGeo = new THREE.SphereGeometry(1, 20, 10, 0, Math.PI * 2, 0, Math.PI / 2);
     this.domeMat = new THREE.MeshStandardMaterial({ color: 0x2f8a6a, metalness: 0.4, roughness: 0.35 });
     this.minaretGeo = new THREE.CylinderGeometry(1.0, 1.3, 1, 10).translate(0, 0.5, 0);
@@ -53,6 +59,91 @@ export class OsmCity {
     this.minaretMat = new THREE.MeshLambertMaterial({ color: 0xf4efe2 });
     this.tankGeo = new THREE.CylinderGeometry(0.7, 0.7, 1.4, 8).translate(0, 0.7, 0);
     this.tankMat = new THREE.MeshLambertMaterial({ color: 0x3a3a3a });
+    // بردورة مدهونة أصفر وأسود (متر لكل لون)
+    const stripe = document.createElement('canvas');
+    stripe.width = 64; stripe.height = 8;
+    const sg = stripe.getContext('2d');
+    sg.fillStyle = '#f2c230'; sg.fillRect(0, 0, 32, 8);
+    sg.fillStyle = '#161616'; sg.fillRect(32, 0, 32, 8);
+    const stripeTex = new THREE.CanvasTexture(stripe);
+    stripeTex.wrapS = THREE.RepeatWrapping;
+    stripeTex.colorSpace = THREE.SRGBColorSpace;
+    this.curbMat = new THREE.MeshLambertMaterial({ map: stripeTex, side: THREE.DoubleSide });
+    this.plainCurbMat = new THREE.MeshLambertMaterial({ color: 0x9a958c, side: THREE.DoubleSide });
+    const signTex = (draw) => {
+      const cv = document.createElement('canvas');
+      cv.width = cv.height = 128;
+      draw(cv.getContext('2d'));
+      const t = new THREE.CanvasTexture(cv);
+      t.colorSpace = THREE.SRGBColorSpace;
+      return t;
+    };
+    const oneTex = signTex((s2) => {
+      s2.fillStyle = '#fff'; s2.beginPath(); s2.arc(64, 64, 62, 0, 7); s2.fill();
+      s2.fillStyle = '#1456b8'; s2.beginPath(); s2.arc(64, 64, 56, 0, 7); s2.fill();
+      s2.fillStyle = '#fff'; s2.fillRect(56, 44, 16, 52);
+      s2.beginPath(); s2.moveTo(36, 50); s2.lineTo(64, 18); s2.lineTo(92, 50); s2.fill();
+    });
+    const noTex = signTex((s2) => {
+      s2.fillStyle = '#fff'; s2.beginPath(); s2.arc(64, 64, 62, 0, 7); s2.fill();
+      s2.fillStyle = '#d0141e'; s2.beginPath(); s2.arc(64, 64, 56, 0, 7); s2.fill();
+      s2.fillStyle = '#fff'; s2.fillRect(26, 54, 76, 20);
+    });
+    const cyl = (r, h) => new THREE.CylinderGeometry(r, r, h, 8).translate(0, h / 2, 0);
+    this.furn = {
+      poleMat: new THREE.MeshLambertMaterial({ color: 0x2f3a36 }),
+      lampMat: new THREE.MeshStandardMaterial({ color: 0xfff1d0, emissive: 0xffd28a, emissiveIntensity: 3 }),
+      boxMat: new THREE.MeshLambertMaterial({ color: 0x1b1b1b }),
+      signOneMat: new THREE.MeshBasicMaterial({ map: oneTex, transparent: true, alphaTest: 0.5 }),
+      signNoMat: new THREE.MeshBasicMaterial({ map: noTex, transparent: true, alphaTest: 0.5 }),
+      lampPole: cyl(0.09, 7.5),
+      lampArm: new THREE.BoxGeometry(1.8, 0.12, 0.12).translate(0.9, 7.4, 0),
+      lampHead: new THREE.BoxGeometry(0.6, 0.18, 0.35).translate(1.75, 7.3, 0),
+      lightPole: cyl(0.1, 3.6),
+      lightBox: new THREE.BoxGeometry(0.35, 1.05, 0.35).translate(0, 4.15, 0),
+      bulbR: new THREE.SphereGeometry(0.11, 8, 6).translate(0.19, 4.5, 0),
+      bulbY: new THREE.SphereGeometry(0.11, 8, 6).translate(0.19, 4.15, 0),
+      bulbG: new THREE.SphereGeometry(0.11, 8, 6).translate(0.19, 3.8, 0),
+      signPole: cyl(0.05, 2.6),
+      signDisc: new THREE.CircleGeometry(0.4, 20).rotateY(Math.PI / 2).translate(0.06, 2.4, 0),
+    };
+    this.lightR = new THREE.MeshStandardMaterial({ color: 0x330000, emissive: 0xff2010, emissiveIntensity: 0.05 });
+    this.lightY = new THREE.MeshStandardMaterial({ color: 0x332200, emissive: 0xffb000, emissiveIntensity: 0.05 });
+    this.lightG = new THREE.MeshStandardMaterial({ color: 0x003300, emissive: 0x10ff60, emissiveIntensity: 0.05 });
+    // يافطة المركز
+    {
+      const cv = document.createElement('canvas');
+      cv.width = 1024; cv.height = 256;
+      const s2 = cv.getContext('2d');
+      s2.fillStyle = '#0f6b5c'; s2.fillRect(0, 0, 1024, 256);
+      s2.strokeStyle = '#fff'; s2.lineWidth = 10; s2.strokeRect(10, 10, 1004, 236);
+      s2.fillStyle = '#fff'; s2.direction = 'rtl'; s2.textAlign = 'center';
+      s2.font = 'bold 86px Cairo, Tahoma, sans-serif';
+      s2.fillText(CONFIG.centerShort, 512, 118);
+      s2.font = '46px Cairo, Tahoma, sans-serif';
+      s2.fillText('للطب النفسي وعلاج الإدمان', 512, 200);
+      this.centerSignTex = new THREE.CanvasTexture(cv);
+      this.centerSignTex.colorSpace = THREE.SRGBColorSpace;
+    }
+    this.centerInfo = null;
+    this.seaMat = new THREE.MeshPhongMaterial({ color: 0x3a8cc4, emissive: 0x15466e, specular: 0x406080, shininess: 25, side: THREE.DoubleSide });
+    {
+      // درابزين الكورنيش: أعمدة بيضا وفراغات
+      const cv = document.createElement('canvas');
+      cv.width = 64; cv.height = 64;
+      const s2 = cv.getContext('2d');
+      s2.clearRect(0, 0, 64, 64);
+      s2.fillStyle = '#f1ede4';
+      s2.fillRect(0, 50, 64, 14); // قاعدة
+      for (let x = 4; x < 64; x += 16) { s2.fillRect(x, 8, 8, 44); s2.beginPath(); s2.arc(x + 4, 26, 6, 0, 7); s2.fill(); }
+      s2.fillRect(0, 0, 64, 8);
+      const t = new THREE.CanvasTexture(cv);
+      t.wrapS = THREE.RepeatWrapping;
+      t.colorSpace = THREE.SRGBColorSpace;
+      this.balustradeMat = new THREE.MeshLambertMaterial({ map: t, alphaTest: 0.5, transparent: true, side: THREE.DoubleSide });
+    }
+    this.railMat = new THREE.MeshLambertMaterial({ color: 0xf1ede4, side: THREE.DoubleSide });
+    this.rockMat = new THREE.MeshLambertMaterial({ color: 0x8f8a82, flatShading: true });
     this.roads = []; // كل الشوارع المحمّلة (للمرور والأرصفة والخريطة الصغيرة)
     this.version = 0; // بيزيد لما شوارع جديدة تحمّل
   }
@@ -122,6 +213,22 @@ export class OsmCity {
     const col = new THREE.Color();
     const WALLS = [0xece2cf, 0xf2e6c8, 0xe6d3b3, 0xddd5c8, 0xefdccb, 0xe9e4d6, 0xd9cdb6, 0xf3ecdd, 0xe8d9bc, 0xcfc6b5];
     const v1 = d.b.length && d.b[0].length >= 3 && this.index.version >= 2;
+    // مبنى المركز: اللي فيه نقطة المركز، أو أقرب واحد ليها (لحد ٤٠ م)
+    let centerIdx = -1, centerPoly = null;
+    if (!this.centerInfo) {
+      let bestD = 40;
+      d.b.forEach((b, i) => {
+        const p = this.pts(b, v1 ? 3 : 1), n = p.length / 2;
+        let inside = false, cx = 0, cz = 0;
+        for (let a = 0, j = n - 1; a < n; j = a++) {
+          const xa = p[a * 2], za = p[a * 2 + 1], xb = p[j * 2], zb = p[j * 2 + 1];
+          if ((za > 0) !== (zb > 0) && 0 < ((xb - xa) * (0 - za)) / (zb - za) + xa) inside = !inside;
+          cx += xa; cz += za;
+        }
+        const dist = inside ? -1 : Math.hypot(cx / n, cz / n);
+        if (dist < bestD) { bestD = dist; centerIdx = i; }
+      });
+    }
     let idx = -1;
     for (const b of d.b) {
       idx++;
@@ -157,9 +264,11 @@ export class OsmCity {
       else if (area < 120) floors = 4 + Math.floor(seed * 5);
       else if (area < 400) floors = 6 + Math.floor(seed * 6);
       else floors = 7 + Math.floor(seed * 7);
-      const h = Math.max(3, Math.min(hData || floors * FLOOR_H, 150));
+      let h = Math.max(3, Math.min(hData || floors * FLOOR_H, 150));
+      if (idx === centerIdx) h = Math.max(h, 4 * FLOOR_H);
 
-      const facade =
+      const isCenter = idx === centerIdx;
+      const facade = isCenter ? 'center' :
         type === T_INDUS || type === T_STATION || type === T_SMALL ? 'industrial'
           : type === T_SCHOOL || type === T_HOSP ? 'institutional'
             : type === T_MOSQUE || type === T_CHURCH ? 'classic'
@@ -170,9 +279,10 @@ export class OsmCity {
       if (type === T_SCHOOL) wallHex = [0xf0c060, 0xe8a070, 0xd8d0a0][Math.floor(seed * 3)];
       if (type === T_MOSQUE || type === T_HOSP) wallHex = 0xf7f4ec;
       if (type === T_INDUS) wallHex = 0xb8b2a6;
+      if (isCenter) wallHex = 0xffffff;
       col.setHex(wallHex);
       // تعتيق بسيط: الأدوار اللي تحت أغمق شوية
-      const shopsBand = (facade === 'residential' || facade === 'modern') && area > 50 && floors >= 3 && seed2 > 0.25 ? 4.2 : 0;
+      const shopsBand = !isCenter && (facade === 'residential' || facade === 'modern') && area > 50 && floors >= 3 && seed2 > 0.25 ? 4.2 : 0;
 
       for (let i = 0; i < n; i++) {
         const j = (i + 1) % n;
@@ -217,6 +327,7 @@ export class OsmCity {
         const count = 1 + Math.floor(seed2 * 3);
         for (let q = 0; q < count; q++) tanks.push(cx + (seed - 0.5) * minDim * 0.4 + q * 1.8, h, cz + (seed2 - 0.5) * minDim * 0.4);
       }
+      if (isCenter) centerPoly = { p, cx, cz, h };
       c.polys.push({ p, minx, minz, maxx, maxz });
     }
     for (const [mat, o] of Object.entries(buf)) {
@@ -280,8 +391,10 @@ export class OsmCity {
 
     // ---------- الشوارع ----------
     const asphalt = [], walk = [], white = [], yellow = [];
+    const curbs = { p: [], u: [], n: [] }, plainCurbs = { p: [], u: [], n: [] };
+    const lamps = [], lights = [], signsOne = [], signsNo = [];
     const ribbon = (arr, p, offA, offB, y, from = 0, to = Infinity) => {
-      // شريط بين إزاحتين (offA → offB) على طول الخط
+      // شريط أفقي بين إزاحتين (offA → offB) على طول الخط
       const n = p.length / 2;
       let run = 0;
       for (let i = 0; i < n - 1; i++) {
@@ -299,43 +412,123 @@ export class OsmCity {
       }
       return run;
     };
+    // حيطة رأسية (بردورة) على إزاحة ثابتة، UV بطول الشارع عشان الخطوط الصفرا والسودا
+    const wall = (o, p, off, y0, y1, from, to, facing) => {
+      const n = p.length / 2;
+      let run = 0;
+      for (let i = 0; i < n - 1; i++) {
+        const ax = p[i * 2], az = p[i * 2 + 1], bx = p[i * 2 + 2], bz = p[i * 2 + 3];
+        const len = Math.hypot(bx - ax, bz - az);
+        if (len < 0.05) continue;
+        const s0 = Math.max(run, from), s1 = Math.min(run + len, to);
+        run += len;
+        if (s1 <= s0) continue;
+        const ux = (bx - ax) / len, uz = (bz - az) / len, rx = -uz, rz = ux;
+        const t0 = s0 - (run - len), t1 = s1 - (run - len);
+        const x0 = ax + ux * t0 + rx * off, z0 = az + uz * t0 + rz * off, x1 = ax + ux * t1 + rx * off, z1 = az + uz * t1 + rz * off;
+        o.p.push(x0, y0, z0, x1, y0, z1, x1, y1, z1, x0, y0, z0, x1, y1, z1, x0, y1, z0);
+        o.u.push(s0, 0, s1, 0, s1, 1, s0, 0, s1, 1, s0, 1);
+        for (let q = 0; q < 6; q++) o.n.push(rx * facing, 0, rz * facing);
+      }
+    };
+    // نقطة واتجاه على مسافة s من أول الخط
+    const at = (p, s) => {
+      let run = 0;
+      for (let i = 0; i < p.length - 2; i += 2) {
+        const len = Math.hypot(p[i + 2] - p[i], p[i + 3] - p[i + 1]);
+        if (run + len >= s || i === p.length - 4) {
+          const t = len ? Math.min(1, Math.max(0, (s - run) / len)) : 0;
+          const ux = len ? (p[i + 2] - p[i]) / len : 1, uz = len ? (p[i + 3] - p[i + 1]) / len : 0;
+          return { x: p[i] + (p[i + 2] - p[i]) * t, z: p[i + 1] + (p[i + 3] - p[i + 1]) * t, ux, uz };
+        }
+        run += len;
+      }
+      return { x: p[0], z: p[1], ux: 1, uz: 0 };
+    };
     const polyLen = (p) => { let L = 0; for (let i = 0; i < p.length - 2; i += 2) L += Math.hypot(p[i + 2] - p[i], p[i + 3] - p[i + 1]); return L; };
     const disc = (arr, x, z, r, y) => {
-      for (let a = 0; a < 8; a++) {
-        const a0 = (a / 8) * Math.PI * 2, a1 = ((a + 1) / 8) * Math.PI * 2;
+      for (let a = 0; a < 10; a++) {
+        const a0 = (a / 10) * Math.PI * 2, a1 = ((a + 1) / 10) * Math.PI * 2;
         arr.push(x, y, z, x + Math.cos(a1) * r, y, z + Math.sin(a1) * r, x + Math.cos(a0) * r, y, z + Math.sin(a0) * r);
       }
     };
+
+    // ١) نقرا الشوارع ونلاقي التقاطعات (نقط مشتركة بين أكتر من شارع)
+    const v2 = this.index.version >= 2;
+    const list = [];
+    const vmap = new Map();
     for (const r of d.r) {
-      const v2 = this.index.version >= 2;
       const [type, lanesTag, oneway] = r;
       const nameIdx = v2 ? r[3] : -1;
       const p = this.pts(r, v2 ? 4 : 3);
-      const lanes = lanesTag || (oneway ? (type <= 3 ? 2 : 1) : type <= 2 ? 4 : type <= 4 ? 2 : 2);
+      const lanes = lanesTag || (oneway ? (type <= 3 ? 2 : 1) : type <= 2 ? 4 : 2);
       const laneW = type <= 4 ? 3.3 : 2.9;
       const w = type === 7 ? 5 : Math.max(lanes * laneW, type >= 6 ? 4 : 5.5);
-      const name = nameIdx >= 0 ? d.names[nameIdx] : '';
-      const road = { chunk: k, type, oneway, w, p, name, lanes };
+      const road = { chunk: k, type, oneway, w, p, name: nameIdx >= 0 ? d.names[nameIdx] : '', lanes, L: polyLen(p) };
       this.roads.push(road);
-      const L = polyLen(p);
-      const ya = 0.09, yw = 0.06, ym = 0.115;
-      ribbon(asphalt, p, -w / 2, w / 2, type === 7 ? yw + 0.01 : ya);
-      disc(asphalt, p[0], p[1], w / 2, ya);
-      disc(asphalt, p[p.length - 2], p[p.length - 1], w / 2, ya);
+      list.push(road);
+      const seen = new Set();
+      for (let i = 0; i < p.length; i += 2) {
+        const key = `${Math.round(p[i])},${Math.round(p[i + 1])}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        let v = vmap.get(key);
+        if (!v) vmap.set(key, (v = { x: p[i], z: p[i + 1], roads: [], minType: 9, maxW: 0 }));
+        v.roads.push(road);
+        v.minType = Math.min(v.minType, type);
+        v.maxW = Math.max(v.maxW, w);
+      }
+    }
+    const junctions = [...vmap.values()].filter((v) => v.roads.length >= 2 && v.roads.some((r) => r.type <= 6));
+
+    // ٢) نرسم كل شارع: أسفلت، رصيف عالي ببردورة، جزيرة في نص الشوارع الكبيرة، خطوط وأسهم
+    const ya = 0.09, yw = 0.2, ym = 0.115;
+    for (const road of list) {
+      const { type, oneway, w, p, lanes, L } = road;
+      ribbon(asphalt, p, -w / 2, w / 2, type === 7 ? yw : ya);
+      // أماكن التقاطعات على الشارع ده (عشان الرصيف والجزيرة يتقطعوا عندها)
+      const gaps = [];
+      let run = 0;
+      for (let i = 0; i < p.length; i += 2) {
+        if (i) run += Math.hypot(p[i] - p[i - 2], p[i + 1] - p[i - 1]);
+        const v = vmap.get(`${Math.round(p[i])},${Math.round(p[i + 1])}`);
+        if (v && v.roads.length >= 2) {
+          const other = Math.max(...v.roads.filter((r) => r !== road).map((r) => r.w), 0);
+          gaps.push([run - other / 2 - 2.5, run + other / 2 + 2.5]);
+        }
+      }
+      const spans = [];
+      let cur = 0;
+      for (const [a, b] of gaps.sort((x, y) => x[0] - y[0])) { if (a > cur) spans.push([cur, a]); cur = Math.max(cur, b); }
+      if (cur < L) spans.push([cur, L]);
+
       if (type >= 2 && type <= 6) {
-        ribbon(walk, p, w / 2, w / 2 + 2.4, yw);
-        ribbon(walk, p, -w / 2 - 2.4, -w / 2, yw);
+        const curbO = type <= 3 ? curbs : plainCurbs;
+        for (const [a, b] of spans) {
+          if (b - a < 1) continue;
+          ribbon(walk, p, w / 2, w / 2 + 2.6, yw, a, b);
+          ribbon(walk, p, -w / 2 - 2.6, -w / 2, yw, a, b);
+          wall(curbO, p, w / 2, ya, yw, a, b, -1);
+          wall(curbO, p, -w / 2, ya, yw, a, b, 1);
+        }
       }
       if (type > 6 || L < 6) continue;
-      // علامات الأرض
-      if (!oneway && type <= 4) {
-        ribbon(yellow, p, -0.28, -0.12, ym, 3, L - 3); // خط أصفر مزدوج في النص
+      const bigMedian = !oneway && type <= 2 && lanes >= 4 && w >= 12;
+      if (bigMedian) {
+        // جزيرة خرسانة في النص بحواجز صفرا وسودا
+        for (const [a, b] of spans) {
+          if (b - a < 4) continue;
+          ribbon(walk, p, -0.7, 0.7, 0.42, a + 1, b - 1);
+          wall(curbs, p, 0.7, ya, 0.42, a + 1, b - 1, 1);
+          wall(curbs, p, -0.7, ya, 0.42, a + 1, b - 1, -1);
+        }
+      } else if (!oneway && type <= 4) {
+        ribbon(yellow, p, -0.28, -0.12, ym, 3, L - 3); // خط أصفر مزدوج
         ribbon(yellow, p, 0.12, 0.28, ym, 3, L - 3);
       }
       const perDir = oneway ? lanes : Math.max(1, Math.floor(lanes / 2));
       if (type <= 5) {
-        // خطوط الحارات المتقطعة
-        for (let side of oneway ? [1] : [1, -1]) {
+        for (const side of oneway ? [1] : [1, -1]) {
           for (let li = 1; li < perDir; li++) {
             const o = oneway ? -w / 2 + li * (w / lanes) : side * li * (w / 2 / perDir);
             for (let s = 4; s < L - 4; s += 10) ribbon(white, p, o - 0.07, o + 0.07, ym, s, s + 4);
@@ -343,13 +536,46 @@ export class OsmCity {
         }
         if (type <= 3) { ribbon(white, p, w / 2 - 0.45, w / 2 - 0.3, ym, 2, L - 2); ribbon(white, p, -w / 2 + 0.3, -w / 2 + 0.45, ym, 2, L - 2); }
       }
-      // أسهم الاتجاه في الشوارع اللي اتجاه واحد
-      if (oneway) for (let s = 15; s < L - 8; s += 40) this.arrow(white, p, s, ym, w, lanes);
-      // عبور مشاة (زيبرا) عند أطراف الشوارع الرئيسية
+      if (oneway) {
+        for (let s = 15; s < L - 8; s += 40) this.arrow(white, p, s, ym, w, lanes);
+        // يافطة "اتجاه واحد" في الأول، و"ممنوع الدخول" من الناحية التانية في الآخر
+        if (L > 25 && type <= 5) {
+          const a = at(p, 4), b = at(p, L - 4);
+          signsOne.push(a.x + -a.uz * (w / 2 + 0.6), a.z + a.ux * (w / 2 + 0.6), Math.atan2(-a.uz, -a.ux));
+          signsNo.push(b.x - -b.uz * (w / 2 + 0.6), b.z - b.ux * (w / 2 + 0.6), Math.atan2(b.uz, b.ux));
+        }
+      }
+      // زيبرا عند أطراف الشوارع الرئيسية
       if (type >= 2 && type <= 4 && L > 40) {
         for (const s of [5, L - 7]) for (let o = -w / 2 + 0.6; o < w / 2 - 0.4; o += 1.1) ribbon(white, p, o, o + 0.55, ym, s, s + 2.6);
       }
+      // أعمدة نور على الرصيف كل ٣٠ م، بالتبادل يمين وشمال
+      if (type <= 4) {
+        let side = 1;
+        for (const [a, b] of spans) {
+          for (let s = a + 6; s < b - 4; s += 30) {
+            const q = at(p, s);
+            const off = (w / 2 + 0.5) * side;
+            lamps.push(q.x + -q.uz * off, q.z + q.ux * off, Math.atan2(-side * q.ux, side * q.uz));
+            side = -side;
+          }
+        }
+      }
     }
+    // ٣) التقاطعات: أسفلت يقفل الزوايا + إشارات مرور عند تقاطعات الشوارع الرئيسية
+    for (const v of junctions) {
+      disc(asphalt, v.x, v.z, v.maxW / 2 + 0.5, ya + 0.002);
+      if (v.minType <= 3 && v.roads.length >= 2 && v.roads.filter((r) => r.type <= 5).length >= 2) {
+        const r0 = v.roads.reduce((a, b) => (a.type <= b.type ? a : b));
+        const q = at(r0.p, 0);
+        const off = v.maxW / 2 + 1.2;
+        for (const [sx, sz] of [[1, 1], [-1, -1]]) {
+          const x = v.x + (q.ux * sx - q.uz * sz) * off, z = v.z + (q.uz * sx + q.ux * sz) * off;
+          lights.push(x, z, Math.atan2(v.z - z, v.x - x));
+        }
+      }
+    }
+
     const flat = (arr, mat) => {
       if (!arr.length) return;
       const geo = new THREE.BufferGeometry();
@@ -361,10 +587,22 @@ export class OsmCity {
       m.receiveShadow = true;
       g.add(m);
     };
-    flat(walk, this.walkMat);
+    const vert = (o, mat) => {
+      if (!o.p.length) return;
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(o.p, 3));
+      geo.setAttribute('normal', new THREE.Float32BufferAttribute(o.n, 3));
+      geo.setAttribute('uv', new THREE.Float32BufferAttribute(o.u, 2));
+      g.add(new THREE.Mesh(geo, mat));
+    };
     flat(asphalt, this.roadMat);
+    flat(walk, this.walkMat);
     flat(white, this.lineMat);
     flat(yellow, this.yellowMat);
+    vert(curbs, this.curbMat);
+    vert(plainCurbs, this.plainCurbMat);
+    this.furniture(g, lamps, lights, signsOne, signsNo);
+    if (centerPoly) this.placeCenter(g, centerPoly);
 
     // ---------- الحدائق ----------
     const pp = [];
@@ -398,6 +636,91 @@ export class OsmCity {
     this.version++;
   }
 
+  // أعمدة نور، إشارات مرور، يافطات — كلها InstancedMesh
+  furniture(g, lamps, lights, signsOne, signsNo) {
+    const d = new THREE.Object3D();
+    const inst = (geo, mat, arr, stride, place) => {
+      const n = arr.length / stride;
+      if (!n) return;
+      const m = new THREE.InstancedMesh(geo, mat, n);
+      for (let i = 0; i < n; i++) {
+        d.position.set(0, 0, 0); d.rotation.set(0, 0, 0); d.scale.set(1, 1, 1);
+        place(arr[i * stride], arr[i * stride + 1], arr[i * stride + 2]);
+        d.updateMatrix();
+        m.setMatrixAt(i, d.matrix);
+      }
+      m.castShadow = true;
+      g.add(m);
+    };
+    const F = this.furn;
+    const pose = (x, z, yaw, y = 0) => { d.position.set(x, y, z); d.rotation.y = -yaw; };
+    // أعمدة النور
+    inst(F.lampPole, F.poleMat, lamps, 3, (x, z, yaw) => pose(x, z, yaw));
+    inst(F.lampArm, F.poleMat, lamps, 3, (x, z, yaw) => pose(x, z, yaw));
+    inst(F.lampHead, F.lampMat, lamps, 3, (x, z, yaw) => pose(x, z, yaw));
+    // إشارات المرور
+    inst(F.lightPole, F.poleMat, lights, 3, (x, z, yaw) => pose(x, z, yaw));
+    inst(F.lightBox, F.boxMat, lights, 3, (x, z, yaw) => pose(x, z, yaw));
+    inst(F.bulbR, this.lightR, lights, 3, (x, z, yaw) => pose(x, z, yaw));
+    inst(F.bulbY, this.lightY, lights, 3, (x, z, yaw) => pose(x, z, yaw));
+    inst(F.bulbG, this.lightG, lights, 3, (x, z, yaw) => pose(x, z, yaw));
+    // اليافطات
+    const allSigns = [...signsOne, ...signsNo];
+    inst(F.signPole, F.poleMat, allSigns, 3, (x, z, yaw) => pose(x, z, yaw));
+    inst(F.signDisc, F.signOneMat, signsOne, 3, (x, z, yaw) => pose(x, z, yaw));
+    inst(F.signDisc, F.signNoMat, signsNo, 3, (x, z, yaw) => pose(x, z, yaw));
+  }
+
+  // الإشارات بتقلب: أخضر ٨ث، أصفر ٢ث، أحمر ٨ث
+  tick(t) {
+    const ph = t % 18;
+    this.lightG.emissiveIntensity = ph < 8 ? 3 : 0.05;
+    this.lightY.emissiveIntensity = ph >= 8 && ph < 10 ? 3 : 0.05;
+    this.lightR.emissiveIntensity = ph >= 10 ? 3 : 0.05;
+  }
+
+  // مبنى المركز: يافطة باسمه على الواجهة اللي على الشارع + يافطة على السطح
+  placeCenter(g, cp) {
+    const p = cp.p, n = p.length / 2;
+    let best = null;
+    for (let i = 0; i < n; i++) {
+      const j = (i + 1) % n;
+      const ax = p[i * 2], az = p[i * 2 + 1], bx = p[j * 2], bz = p[j * 2 + 1];
+      const len = Math.hypot(bx - ax, bz - az);
+      if (len < 3) continue;
+      const mx = (ax + bx) / 2, mz = (az + bz) / 2;
+      let nx = (bz - az) / len, nz = -(bx - ax) / len;
+      if (nx * (mx - cp.cx) + nz * (mz - cp.cz) < 0) { nx = -nx; nz = -nz; }
+      const nr = this.nearestRoad(mx + nx * 2, mz + nz * 2);
+      const dist = nr ? Math.hypot(nr.x - mx, nr.z - mz) : 999;
+      if (!best || dist < best.dist) best = { mx, mz, nx, nz, len, dist, nr };
+    }
+    if (!best) return;
+    const tex = this.centerSignTex;
+    const yaw = Math.atan2(best.nx, best.nz);
+    const wSign = Math.min(best.len * 0.9, 16);
+    const front = new THREE.Mesh(new THREE.PlaneGeometry(wSign, wSign / 4), new THREE.MeshBasicMaterial({ map: tex }));
+    front.position.set(best.mx + best.nx * 0.2, Math.min(cp.h - 1.2, 5.5), best.mz + best.nz * 0.2);
+    front.rotation.y = yaw;
+    const top = new THREE.Mesh(new THREE.PlaneGeometry(14, 3.5), new THREE.MeshBasicMaterial({ map: tex, side: THREE.DoubleSide }));
+    top.position.set(cp.cx, cp.h + 3.2, cp.cz);
+    top.rotation.y = yaw;
+    const legs = new THREE.InstancedMesh(new THREE.BoxGeometry(0.2, 3.2, 0.2).translate(0, 1.6, 0), this.furn.poleMat, 2);
+    const dd = new THREE.Object3D();
+    for (const [i, s] of [[0, -5], [1, 5]]) {
+      dd.position.set(cp.cx + Math.cos(yaw) * s, cp.h, cp.cz - Math.sin(yaw) * s);
+      dd.updateMatrix();
+      legs.setMatrixAt(i, dd.matrix);
+    }
+    // بوابة صغيرة قدّام الواجهة
+    const gate = new THREE.Mesh(new THREE.BoxGeometry(Math.min(wSign * 0.5, 6), 3, 0.3), new THREE.MeshLambertMaterial({ color: 0x0f6b5c }));
+    gate.position.set(best.mx + best.nx * 0.25, 1.5, best.mz + best.nz * 0.25);
+    gate.rotation.y = yaw;
+    g.add(front, top, legs, gate);
+    const door = best.nr || { x: best.mx + best.nx * 6, z: best.mz + best.nz * 6, heading: 0 };
+    this.centerInfo = { x: door.x, z: door.z, heading: door.heading || 0, sign: { x: best.mx, z: best.mz } };
+  }
+
   // سهم مرسوم على الأرض عند المسافة s في كل حارة
   arrow(arr, p, s, y, w, lanes) {
     let run = 0;
@@ -418,6 +741,106 @@ export class OsmCity {
       }
       run += len;
     }
+  }
+
+  // ---------- البحر والكورنيش ----------
+  buildCoast(chains) {
+    const g = new THREE.Group();
+    this.sea = [];
+    const wallP = [], wallU = [], wallN = [], railP = [], rocks = [];
+    for (const raw of chains) {
+      const n = raw.length / 2;
+      if (n < 20) continue;
+      const p = new Float32Array(raw.length);
+      for (let i = 0; i < raw.length; i += 2) { p[i] = raw[i] * this.unit + this.shift.x; p[i + 1] = raw[i + 1] * this.unit + this.shift.z; }
+      const closed = p[0] === p[p.length - 2] && p[1] === p[p.length - 1];
+      if (closed) continue; // جزر صغيرة/لسان — نسيبها
+      // البحر على يمين اتجاه الخط (قاعدة OSM): نقفل المضلع بنقطتين بعاد في البحر
+      let ux = p[p.length - 2] - p[0], uz = p[p.length - 1] - p[1];
+      const ul = Math.hypot(ux, uz) || 1; ux /= ul; uz /= ul;
+      const rx = -uz, rz = ux, FAR = 6000;
+      const poly = Array.from(p);
+      poly.push(p[p.length - 2] + rx * FAR + ux * FAR, p[p.length - 1] + rz * FAR + uz * FAR, p[0] + rx * FAR - ux * FAR, p[1] + rz * FAR - uz * FAR);
+      let minx = Infinity, minz = Infinity, maxx = -Infinity, maxz = -Infinity;
+      for (let i = 0; i < poly.length; i += 2) { minx = Math.min(minx, poly[i]); maxx = Math.max(maxx, poly[i]); minz = Math.min(minz, poly[i + 1]); maxz = Math.max(maxz, poly[i + 1]); }
+      this.sea.push({ p: poly, minx, minz, maxx, maxz });
+      const contour = [];
+      for (let i = 0; i < poly.length; i += 2) contour.push(new THREE.Vector2(poly[i], poly[i + 1]));
+      try {
+        const pos = [];
+        for (const t of THREE.ShapeUtils.triangulateShape(contour, [])) for (const vi of t) pos.push(contour[vi].x, 0.03, contour[vi].y);
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+        const nrm = new Float32Array(pos.length);
+        for (let i = 1; i < nrm.length; i += 3) nrm[i] = 1;
+        geo.setAttribute('normal', new THREE.BufferAttribute(nrm, 3));
+        g.add(new THREE.Mesh(geo, this.seaMat));
+      } catch { /* ignore */ }
+      // سور الكورنيش (درابزين أبيض) على حافة اليابسة + بلوكات خرسانة في المية
+      let run = 0;
+      for (let i = 0; i < n - 1; i++) {
+        const ax = p[i * 2], az = p[i * 2 + 1], bx = p[i * 2 + 2], bz = p[i * 2 + 3];
+        const len = Math.hypot(bx - ax, bz - az);
+        if (len < 0.2) continue;
+        const sx = (bx - ax) / len, sz = (bz - az) / len, lx = sz, lz = -sx; // ناحية اليابسة (شمال الاتجاه)
+        const o = 0.6;
+        const x0 = ax + lx * o, z0 = az + lz * o, x1 = bx + lx * o, z1 = bz + lz * o;
+        wallP.push(x0, 0, z0, x1, 0, z1, x1, 1.15, z1, x0, 0, z0, x1, 1.15, z1, x0, 1.15, z0);
+        wallU.push(run, 0, run + len, 0, run + len, 1, run, 0, run + len, 1, run, 1);
+        for (let q = 0; q < 6; q++) wallN.push(-lx, 0, -lz);
+        // الكوبستة اللي فوق السور
+        const w2 = 0.18;
+        railP.push(x0 - lx * w2, 1.15, z0 - lz * w2, x1 - lx * w2, 1.15, z1 - lz * w2, x1 + lx * w2, 1.15, z1 + lz * w2,
+          x0 - lx * w2, 1.15, z0 - lz * w2, x1 + lx * w2, 1.15, z1 + lz * w2, x0 + lx * w2, 1.15, z0 + lz * w2);
+        for (let s = 0; s < len; s += 2.2) {
+          const h = hash((Math.round(ax * 10 + s * 7) ^ Math.round(az * 13)) >>> 0);
+          const off = 1.5 + h * 4;
+          rocks.push(ax + sx * s - lx * off, az + sz * s - lz * off, h);
+        }
+        run += len;
+      }
+    }
+    if (wallP.length) {
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(wallP, 3));
+      geo.setAttribute('uv', new THREE.Float32BufferAttribute(wallU, 2));
+      geo.setAttribute('normal', new THREE.Float32BufferAttribute(wallN, 3));
+      const m = new THREE.Mesh(geo, this.balustradeMat);
+      m.castShadow = true;
+      g.add(m);
+      const rg = new THREE.BufferGeometry();
+      rg.setAttribute('position', new THREE.Float32BufferAttribute(railP, 3));
+      rg.computeVertexNormals();
+      g.add(new THREE.Mesh(rg, this.railMat));
+    }
+    if (rocks.length) {
+      const inst = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1, 0), this.rockMat, rocks.length / 3);
+      const d = new THREE.Object3D();
+      for (let i = 0; i < rocks.length; i += 3) {
+        const h = rocks[i + 2];
+        d.position.set(rocks[i], 0.1 + h * 0.4, rocks[i + 1]);
+        d.rotation.set(h * 5, h * 11, h * 3);
+        d.scale.setScalar(0.8 + h * 0.7);
+        d.updateMatrix();
+        inst.setMatrixAt(i / 3, d.matrix);
+      }
+      g.add(inst);
+    }
+    this.group.add(g);
+  }
+
+  pointInSea(x, z) {
+    for (const s of this.sea || []) {
+      if (x < s.minx || x > s.maxx || z < s.minz || z > s.maxz) continue;
+      const p = s.p, n = p.length / 2;
+      let inside = false;
+      for (let a = 0, b = n - 1; a < n; b = a++) {
+        const xa = p[a * 2], za = p[a * 2 + 1], xb = p[b * 2], zb = p[b * 2 + 1];
+        if ((za > z) !== (zb > z) && x < ((xb - xa) * (z - za)) / (zb - za) + xa) inside = !inside;
+      }
+      if (inside) return true;
+    }
+    return false;
   }
 
   // ---------- التصادم ----------
@@ -449,7 +872,8 @@ export class OsmCity {
     const c = Math.cos(h), s = Math.sin(h);
     const hl = len / 2 - 0.2, hw = wid / 2 - 0.1;
     for (const [a, b] of [[hl, hw], [hl, -hw], [-hl, hw], [-hl, -hw], [hl, 0], [-hl, 0]]) {
-      if (this.pointInBuilding(x + a * c - b * s, z + a * s + b * c)) return true;
+      const px = x + a * c - b * s, pz = z + a * s + b * c;
+      if (this.pointInBuilding(px, pz) || this.pointInSea(px, pz)) return true;
     }
     return false;
   }
