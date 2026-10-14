@@ -8,7 +8,9 @@ import { TILE, COLS, ROWS, T, CENTER, DISTRICTS, buildMap, solidAt, tileAt, dist
 import { buildWorld, makeMarker } from './world.js';
 import { People } from './people.js';
 import { Characters } from './characters.js';
-import { makeVan, setNightLights } from './vehicles.js';
+import { setNightLights } from './vehicles.js';
+import { makeDetailedVan } from './vanmodel.js';
+import { EgyptRadio } from './radio.js';
 import { DayNight, Weather } from './daynight.js';
 import { Traffic } from './traffic.js';
 import { Sfx } from './audio.js';
@@ -96,6 +98,7 @@ if (REAL) {
     osm = await O.OsmCity.load(CONFIG.real.center);
     if (osm) scene.add(osm.group);
     window.__OsmTraffic = O.OsmTraffic;
+    window.__carPoolMat = O.carPoolMat;
   }
   if (!city) {
     // أرض بسيطة لو من غير جوجل
@@ -114,15 +117,33 @@ function placeName(x, z) {
   }
   return bd < 900 && best ? `قرب ${best.name}` : 'إسكندرية';
 }
-const van = makeVan();
+const van = makeDetailedVan();
 scene.add(van);
-if (Q.shadows) {
-  // نور الفوانيس القدّامية
-  const head = new THREE.SpotLight(0xfff0d0, 40, 45, 0.5, 0.6, 1.5);
-  head.position.set(2.6, 1.0, 0);
-  head.target.position.set(15, 0, 0);
-  van.add(head, head.target);
+// فوانيس بتنوّر الشارع بجد بالليل (كشافين) + بقعة نور على الأسفلت
+const headLights = [];
+if (Q.pbr) {
+  for (const s of [1, -1]) {
+    const sp = new THREE.SpotLight(0xfff2d8, 0, 55, 0.42, 0.55, 1.4);
+    sp.position.set(2.85, 0.95, s * 0.72);
+    sp.target.position.set(18, 0, s * 1.2);
+    van.add(sp, sp.target);
+    headLights.push(sp);
+  }
 }
+const poolTex = (() => {
+  const cv = document.createElement('canvas');
+  cv.width = 128; cv.height = 64;
+  const g = cv.getContext('2d');
+  const gr = g.createRadialGradient(20, 32, 2, 40, 32, 64);
+  gr.addColorStop(0, 'rgba(255,240,210,0.9)'); gr.addColorStop(1, 'rgba(255,240,210,0)');
+  g.fillStyle = gr; g.fillRect(0, 0, 128, 64);
+  return new THREE.CanvasTexture(cv);
+})();
+const poolMat = new THREE.MeshBasicMaterial({ map: poolTex, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending });
+const headPool = new THREE.Mesh(new THREE.PlaneGeometry(16, 6), poolMat);
+headPool.rotation.x = -Math.PI / 2;
+headPool.position.set(10.5, 0.13, 0);
+van.add(headPool);
 const traffic = osm
   ? new window.__OsmTraffic(scene, osm, Math.round(Q.traffic * 0.6))
   : new Traffic(scene, REAL ? [] : map.roads, REAL ? 0 : Q.traffic);
@@ -137,7 +158,7 @@ let savedHour = Number(store.get('markaz_hour'));
 const daynight = new DayNight(world, scene, Number.isFinite(savedHour) && savedHour > 0 ? savedHour : 16.5);
 const weatherMode = store.get('markaz_weather') || 'auto';
 const weather = new Weather(scene, weatherMode);
-daynight.listeners.push((n) => { setNightLights(n); scene.environmentIntensity = 0.55 - n * 0.4; });
+daynight.listeners.push((n) => { setNightLights(n); if (window.__carPoolMat) window.__carPoolMat.opacity = n * 0.4; scene.environmentIntensity = 0.55 - n * 0.4; });
 // انعكاسات من السما الحقيقية (بتتحدّث مع الوقت)
 const skyPmrem = new THREE.PMREMGenerator(renderer);
 const skyScene = new THREE.Scene();
@@ -222,7 +243,7 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyH' || e.code === 'Space') { sfx.horn(); e.preventDefault(); }
   if (e.code === 'KeyC') camMode = (camMode + 1) % 3;
   if (e.code === 'KeyM') sfx.setMuted(!sfx.muted);
-  if (e.code === 'KeyR') cycleRadio();
+  if (e.code === 'KeyR') cycleRadio(e.shiftKey ? -1 : 1);
   if (mission && mission.choosing && ['Digit1', 'Digit2', 'Digit3'].includes(e.code)) chooseOption(Number(e.code.slice(-1)) - 1);
   if (e.code === 'KeyP' || e.code === 'Escape') togglePause();
   if (e.code === 'Enter' && state === 'menu') startGame();
@@ -243,12 +264,24 @@ $('btnSiren').addEventListener('pointerdown', (e) => { e.preventDefault(); toggl
 $('btnHorn').addEventListener('pointerdown', (e) => { e.preventDefault(); sfx.horn(); });
 $('btnCam').addEventListener('pointerdown', (e) => { e.preventDefault(); camMode = (camMode + 1) % 3; });
 $('btnRadio').addEventListener('pointerdown', (e) => { e.preventDefault(); cycleRadio(); });
+// الراديو: مقفول → موسيقى مولّدة → لاسلكي المركز → محطات مصرية حقيقية (بث مباشر)
+const egRadio = new EgyptRadio();
+egRadio.load();
 let radioMode = 0;
-function cycleRadio() {
-  radioMode = (radioMode + 1) % 3;
-  sfx.setRadio(radioMode);
-  $('radioState').textContent = ['📻 الراديو: مقفول', '📻 موسيقى', '📻 لاسلكي المركز'][radioMode];
-  toast(['📻 الراديو اتقفل', '📻 موسيقى', '📻 لاسلكي المركز'][radioMode], 1.5);
+function radioLabel() {
+  if (radioMode === 0) return '📻 الراديو: مقفول';
+  if (radioMode === 1) return '📻 موسيقى';
+  if (radioMode === 2) return '📻 لاسلكي المركز';
+  return `📻 ${egRadio.current ? egRadio.current.name : 'بيدوّر على محطة...'}`;
+}
+egRadio.onChange = () => { $('radioState').textContent = radioLabel(); toast(radioLabel(), 2); };
+function cycleRadio(dir = 1) {
+  const n = 3 + egRadio.stations.length;
+  radioMode = (radioMode + dir + n) % n;
+  if (radioMode >= 3) { sfx.setRadio(0); egRadio.play(radioMode - 3); }
+  else { egRadio.stop(); sfx.setRadio(radioMode); }
+  $('radioState').textContent = radioLabel();
+  toast(radioLabel(), 1.8);
 }
 
 function toggleSiren() {
@@ -438,7 +471,9 @@ function placePeople(p, pos) {
 
 // الدكتور والممرض بينزلوا من العربية ويروحوا للحالة
 function teamOut() {
-  const rx = player.x - Math.cos(player.heading) * 3.4, rz = player.z - Math.sin(player.heading) * 3.4;
+  const rx = player.x - Math.cos(player.heading) * 4.0, rz = player.z - Math.sin(player.heading) * 4.0;
+  van.userData.van.openRear(true);
+  setTimeout(() => van.userData.van.openRear(false), 3500);
   const s = cast.spot;
   cast.doctor = people.addActor({ x: rx, z: rz, shirt: 0xf6f6f6, pants: 0x2b3245, role: 'doctor' });
   cast.nurse = people.addActor({ x: rx + 0.5, z: rz + 0.5, shirt: 0x1f9a8a, pants: 0x1f9a8a, role: 'nurse' });
@@ -449,12 +484,13 @@ function teamOut() {
 
 // الحالة والفريق بيركبوا من الباب اللي ورا
 function boardVan(done) {
-  const rx = player.x - Math.cos(player.heading) * 3.4, rz = player.z - Math.sin(player.heading) * 3.4;
+  const rx = player.x - Math.cos(player.heading) * 4.0, rz = player.z - Math.sin(player.heading) * 4.0;
+  van.userData.van.openRear(true);
   let left = 0;
   for (const a of [cast.patient, cast.doctor, cast.nurse]) {
     if (!a) continue;
     left++;
-    people.walkTo(a, rx, rz, () => { people.removeActor(a); if (--left === 0) { sfx.playSample('door', { vol: 0.6 }); done(); } });
+    people.walkTo(a, rx, rz, () => { people.removeActor(a); if (--left === 0) { van.userData.van.openRear(false); sfx.playSample('door', { vol: 0.6 }); setTimeout(() => sfx.thunk && sfx.thunk(), 700); done(); } });
   }
   if (!left) done();
 }
@@ -517,6 +553,7 @@ function updateMission(dt) {
   } else {
     $('objective').textContent = `رجّع الحالة لـ ${CONFIG.centerShort} (العلامة الخضرا)`;
     if (dist < zoneR && stopped) {
+      if (!m.handover) van.userData.van.openRear(true);
       m.handover += dt;
       $('progress').hidden = false;
       $('progressBar').style.width = `${Math.min(100, (m.handover / 2.5) * 100)}%`;
@@ -594,6 +631,7 @@ function finishMission() {
   const stars = m.comfort >= 85 ? 3 : m.comfort >= 60 ? 2 : 1;
   sfx.ding();
   people.clearActors();
+  setTimeout(() => van.userData.van.openRear(false), 1500);
   centerMarker.visible = false;
   $('progress').hidden = true;
   $('comfortWrap').hidden = true;
@@ -729,6 +767,38 @@ function updatePlayer(dt) {
     else people.crossCooldown = 1;
   }
 
+  // إشارات المرور والمطبات (إسكندرية الحقيقية)
+  if (osm) {
+    for (const sig of osm.signals.values()) {
+      const dx = player.x - sig.x, dz = player.z - sig.z;
+      if (dx * dx + dz * dz > 7 * 7 || sigPassed.has(sig)) continue;
+      sigPassed.add(sig);
+      setTimeout(() => sigPassed.delete(sig), 8000);
+      if (Math.abs(player.speed) > 4 && !player.siren && osm.signalFor(sig, player.heading) === 'R') {
+        score = Math.max(0, score - 40);
+        hurt(6);
+        toast('🚦 قطعت الإشارة! (−٤٠) — استنّى الأخضر أو شغّل السارينة في الطوارئ', 3);
+        sfx.honk(0, 0.12, 2);
+      }
+    }
+    for (const b of osm.bumps) {
+      const dx = player.x - b.x, dz = player.z - b.z;
+      if (dx * dx + dz * dz > 36) continue;
+      const along = dx * b.ux + dz * b.uz, lat = -dx * b.uz + dz * b.ux;
+      if (Math.abs(along) < 0.9 && Math.abs(lat) < b.w / 2 && (!b.hitT || t - b.hitT > 2)) {
+        b.hitT = t;
+        const sp = Math.abs(player.speed);
+        bumpKick = Math.min(1, sp / 10);
+        sfx.thunk(Math.min(1, 0.3 + sp / 12));
+        if (sp > 6) {
+          shake = Math.min(1, sp / 14);
+          hurt(sp * 1.5);
+          if (mission && mission.aboard) toast('⚠️ مطب! خده بالراحة والحالة معاك', 2);
+        }
+      }
+    }
+  }
+
   // سلوك السواقة مع وجود الحالة
   if (mission && mission.aboard) {
     tipCooldown -= dt;
@@ -739,7 +809,8 @@ function updatePlayer(dt) {
   }
 
   if (city) { groundY = city.groundAt(player.x, player.z, dt); people.groundY = groundY; }
-  van.position.set(player.x, groundY, player.z);
+  bumpKick = Math.max(0, bumpKick - dt * 3);
+  van.position.set(player.x, groundY + Math.sin(bumpKick * Math.PI) * 0.12, player.z);
   van.rotation.y = -player.heading;
   van.rotation.z = clamp(-player.speed * 0.0025 * (back ? -1 : fwd ? 1 : 0), -0.03, 0.03);
   for (const w of van.userData.wheels) w.rotation.z -= player.speed * dt / 0.42;
@@ -847,6 +918,8 @@ let t = 0, frames = 0;
 let pedsOnRoad = [];
 const vehiclesNear = [];
 let crowdCount = 0, crowdTimer = 0, attribTimer = 0, streetTimer = 0, gullTimer = 5, clockTimer = 0;
+const sigPassed = new Set();
+let bumpKick = 0;
 
 // ---------- إسكندرية الحقيقية (OSM) ----------
 let osmSnapped = false, osmPedsVersion = -1, recycleTimer = 0, osmWait = 0;
@@ -907,10 +980,12 @@ function step(dt) {
   } else updateCamera(dt);
 
   // سارينة
-  const sl = van.userData.siren;
-  const flash = Math.floor(t * 6) % 2 === 0;
-  sl.red.emissiveIntensity = player.siren && flash ? 4 : 0;
-  sl.blue.emissiveIntensity = player.siren && !flash ? 4 : 0;
+  van.userData.van.update(dt, {
+    braking: keys.down && player.speed > 0.5, reversing: player.speed < -0.3, steer: player.steer, speed: player.speed,
+    night: daynight.night, siren: player.siren, time: t,
+  });
+  for (const hl of headLights) hl.intensity = daynight.night * 90 + weather.value * 20;
+  poolMat.opacity = Math.min(0.55, daynight.night * 0.6 + weather.value * 0.1);
 
   // علامات
   for (const mk of [pickupMarker, centerMarker]) {
@@ -966,6 +1041,7 @@ function step(dt) {
   daynight.rain = weather.value;
   daynight.update(state === 'paused' ? 0 : dt);
   updateSkyEnv();
+  egRadio.duck(player.siren ? 0.45 : !$('dialog').hidden ? 0.5 : 1);
   if (post) post.grading(daynight.night, weather.value, t);
   if (osm) osm.setWet(weather.value);
   weather.update(dt, camera.position, () => sfx.thunder());
@@ -992,4 +1068,4 @@ function frame() {
 frame();
 
 // للاختبار من الكونسول
-window.__game = { people, city, characters, traffic, osm: () => osm, get frames() { return frames; }, get t() { return t; }, player, get state() { return state; }, get mission() { return mission; }, startGame, newMission, step(n, dt = 1 / 30) { for (let i = 0; i < n; i++) step(dt); } };
+window.__game = { vanApi: van.userData.van, radio: egRadio, people, city, characters, traffic, osm: () => osm, get frames() { return frames; }, get t() { return t; }, player, get state() { return state; }, get mission() { return mission; }, startGame, newMission, step(n, dt = 1 / 30) { for (let i = 0; i < n; i++) step(dt); } };

@@ -297,6 +297,13 @@ export class Sfx {
     src.stop(t0 + 3.6);
   }
 
+  // خبطة مطب/قفل باب
+  thunk(power = 1) {
+    if (!this.ctx) return;
+    this.tone(55, 0.25, { type: 'sine', vol: 0.35 * power, slide: -20 });
+    this.tone(110, 0.12, { type: 'triangle', vol: 0.15 * power });
+  }
+
   seagull(pan = 0) {
     for (let i = 0; i < 3; i++) this.tone(1400 + Math.random() * 300, 0.18, { type: 'sine', vol: 0.05, pan, when: i * 0.22, slide: -500 });
   }
