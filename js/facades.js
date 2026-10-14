@@ -198,6 +198,32 @@ function shops(g, S, rand, lit, night) {
   }
 }
 
+// مبنى المركز: حيطة بيضا نضيفة، شريط تيل كل دور، شبابيك عريضة بزجاج أزرق
+function centerFacade(g, S, rand, lit, night) {
+  g.fillStyle = night ? '#000' : '#f4f2ec';
+  g.fillRect(0, 0, S, S);
+  for (let y = 0; y < 4; y++) {
+    const py = y * C;
+    if (!night) {
+      g.fillStyle = '#0f8f7a';
+      g.fillRect(0, py + C - 10, S, 6); // شريط المركز
+    }
+    for (let x = 0; x < 4; x++) {
+      const px = x * C, on = lit[y * 4 + x];
+      if (night) { if (on) { g.fillStyle = '#e8f4ff'; g.fillRect(px + 8, py + 12, 48, 32); } continue; }
+      g.fillStyle = '#d9dcdf';
+      g.fillRect(px + 6, py + 10, 52, 36);
+      const gl = g.createLinearGradient(0, py + 12, 0, py + 44);
+      gl.addColorStop(0, on ? '#eaf3ff' : '#7f9db8');
+      gl.addColorStop(1, on ? '#cfe2f5' : '#2c3e52');
+      g.fillStyle = gl;
+      g.fillRect(px + 8, py + 12, 48, 32);
+      g.fillStyle = '#d9dcdf';
+      g.fillRect(px + 31, py + 12, 2, 32);
+    }
+  }
+}
+
 export function makeFacadeSet() {
   const set = {
     residential: pair(256, 11, residential),
@@ -206,6 +232,7 @@ export function makeFacadeSet() {
     institutional: pair(256, 44, institutional),
     industrial: pair(256, 55, industrial),
     shops: pair(256, 66, shops),
+    center: pair(256, 77, centerFacade),
   };
   const mats = {};
   for (const [k, t] of Object.entries(set)) {

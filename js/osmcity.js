@@ -636,6 +636,13 @@ export class OsmCity {
     const asphalt = [], walk = [], white = [], yellow = [];
     const curbs = { p: [], u: [], n: [] }, plainCurbs = { p: [], u: [], n: [] };
     const lamps = [], lights = [], signsOne = [], signsNo = [], parked = [], cafes = [];
+    const parkedCells = new Set();
+    // العربية الراكنة متدخلش في مبنى
+    const onAnyBuilding = (x, z) => c.polys.some((pl) => x > pl.minx - 1 && x < pl.maxx + 1 && z > pl.minz - 1 && z < pl.maxz + 1 && (() => {
+      const pp = pl.p, n = pp.length / 2; let ins = false;
+      for (let i = 0, j = n - 1; i < n; j = i++) { const xa = pp[i * 2], za = pp[i * 2 + 1], xb = pp[j * 2], zb = pp[j * 2 + 1]; if ((za > z) !== (zb > z) && x < ((xb - xa) * (z - za)) / (zb - za) + xa) ins = !ins; }
+      return ins;
+    })());
     const ribbon = (arr, p, offA, offB, y, from = 0, to = Infinity) => {
       // شريط أفقي بين إزاحتين (offA → offB) على طول الخط
       const n = p.length / 2;
@@ -792,27 +799,27 @@ export class OsmCity {
       if (type >= 2 && type <= 4 && L > 40) {
         for (const s of [5, L - 7]) for (let o = -w / 2 + 0.6; o < w / 2 - 0.4; o += 1.1) ribbon(white, p, o, o + 0.55, ym, s, s + 2.6);
       }
-      // عربيات راكنة نص على الرصيف (زي مصر بالظبط) + قهاوي على الرصيف
-      if (type >= 4 && type <= 6 && L > 24) {
-        for (const side of [1, -1]) {
-          for (const [a, b] of spans) {
-            let s = a + 8;
-            while (s < b - 8) {
-              const h = hash(Math.round(s * 17) ^ Math.round(p[0] * 3) ^ (side > 0 ? 5 : 9));
-              if (h > 0.4) {
-                const q = at(p, s);
-                const off = (w / 2 + 0.25) * side;
-                const x = q.x + -q.uz * off, z = q.z + q.ux * off;
-                const yaw = Math.atan2(q.uz, q.ux) + (h > 0.85 ? Math.PI : 0);
-                parked.push(x, z, yaw, h);
-                // للتصادم: مستطيل العربية
-                const cx = Math.cos(yaw), cz = Math.sin(yaw), hl = 2.1, hw = 0.9;
-                const poly = new Float32Array([x + cx * hl - cz * hw, z + cz * hl + cx * hw, x + cx * hl + cz * hw, z + cz * hl - cx * hw,
-                  x - cx * hl + cz * hw, z - cz * hl - cx * hw, x - cx * hl - cz * hw, z - cz * hl + cx * hw]);
-                c.polys.push({ p: poly, minx: x - 2.3, maxx: x + 2.3, minz: z - 2.3, maxz: z + 2.3 });
-              }
-              s += 6 + h * 4;
+      // عربيات راكنة على يمين الشارع، أغلبها على الرصيف (زي مصر)، بس في الشوارع اللي عرضها يسمح
+      if (type >= 4 && type <= 6 && L > 24 && w >= 6.5) {
+        const side = oneway ? 1 : 1; // يمين اتجاه الرسم
+        for (const [a2, b2] of spans) {
+          let s2 = a2 + 9;
+          while (s2 < b2 - 9) {
+            const h = hash(Math.round(s2 * 17) ^ Math.round(p[0] * 3) ^ 5);
+            const q = at(p, s2);
+            const off = (w / 2 + 0.75) * side;
+            const x = q.x + -q.uz * off, z = q.z + q.ux * off;
+            const key = Math.floor(x / 5) * 100003 + Math.floor(z / 5);
+            if (h > 0.45 && !parkedCells.has(key) && !onAnyBuilding(x, z)) {
+              parkedCells.add(key);
+              const yaw = Math.atan2(q.uz, q.ux);
+              parked.push(x, z, yaw, h);
+              const cx = Math.cos(yaw), cz = Math.sin(yaw), hl = 2.15, hw = 0.88;
+              const poly = new Float32Array([x + cx * hl - cz * hw, z + cz * hl + cx * hw, x + cx * hl + cz * hw, z + cz * hl - cx * hw,
+                x - cx * hl + cz * hw, z - cz * hl - cx * hw, x - cx * hl - cz * hw, z - cz * hl + cx * hw]);
+              c.polys.push({ p: poly, minx: x - 2.3, maxx: x + 2.3, minz: z - 2.3, maxz: z + 2.3 });
             }
+            s2 += 7.5 + h * 5;
           }
         }
       }
@@ -1052,11 +1059,13 @@ export class OsmCity {
     if (!best) return;
     const tex = this.centerSignTex;
     const yaw = Math.atan2(best.nx, best.nz);
-    const wSign = Math.min(best.len * 0.9, 16);
-    const front = new THREE.Mesh(new THREE.PlaneGeometry(wSign, wSign / 4), new THREE.MeshBasicMaterial({ map: tex }));
+    const wSign = Math.min(best.len * 0.8, 9);
+    const signMat = new THREE.MeshLambertMaterial({ map: tex, emissiveMap: tex, emissive: 0xffffff, emissiveIntensity: 0.25 });
+    this.centerSignMat = signMat;
+    const front = new THREE.Mesh(new THREE.PlaneGeometry(wSign, wSign / 4), signMat);
     front.position.set(best.mx + best.nx * 0.2, Math.min(cp.h - 1.2, 5.5), best.mz + best.nz * 0.2);
     front.rotation.y = yaw;
-    const top = new THREE.Mesh(new THREE.PlaneGeometry(14, 3.5), new THREE.MeshBasicMaterial({ map: tex, side: THREE.DoubleSide }));
+    const top = new THREE.Mesh(new THREE.PlaneGeometry(10, 2.5), new THREE.MeshLambertMaterial({ map: tex, emissiveMap: tex, emissive: 0xffffff, emissiveIntensity: 0.25, side: THREE.DoubleSide }));
     top.position.set(cp.cx, cp.h + 3.2, cp.cz);
     top.rotation.y = yaw;
     const legs = new THREE.InstancedMesh(new THREE.BoxGeometry(0.2, 3.2, 0.2).translate(0, 1.6, 0), this.furn.poleMat, 2);
