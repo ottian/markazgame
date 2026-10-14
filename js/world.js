@@ -25,7 +25,7 @@ function rng(seed) {
 }
 
 // واجهة مبنى: 4×4 شبابيك (بعضها منوّر) + بلكونات
-function makeFacadeTextures() {
+export function makeFacadeTextures() {
   const rand = rng(42);
   const lit = [];
   for (let i = 0; i < 16; i++) lit.push(rand() < 0.35);

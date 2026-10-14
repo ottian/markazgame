@@ -2,9 +2,6 @@ name: Fetch Alexandria map (OpenStreetMap)
 
 on:
   workflow_dispatch:
-  push:
-    branches: [claude/taxi-game-0qzyhv]
-    paths: [tools/fetch_osm.py, .github/workflows/fetch-osm.yml]
 
 permissions:
   contents: write

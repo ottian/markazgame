@@ -18,41 +18,78 @@ BBOX = (31.170, 29.850, 31.300, 30.030)  # جنوب، غرب، شمال، شرق
 CHUNK = 500  # متر
 OUT = os.path.join(os.path.dirname(__file__), '..', 'data', 'osm')
 MIRRORS = [
-    'https://overpass-api.de/api/interpreter',
     'https://overpass.kumi.systems/api/interpreter',
     'https://overpass.private.coffee/api/interpreter',
+    'https://overpass-api.de/api/interpreter',
 ]
+CACHE = os.environ.get('OSM_CACHE', '')  # فولدر لحفظ كل مربع (عشان لو وقف نكمّل من مكانه)
 ROAD_TYPES = {
     'motorway': 1, 'trunk': 1, 'primary': 2, 'secondary': 3, 'tertiary': 4,
     'motorway_link': 2, 'trunk_link': 2, 'primary_link': 3, 'secondary_link': 4, 'tertiary_link': 4,
     'unclassified': 5, 'residential': 5, 'living_street': 6, 'service': 6, 'pedestrian': 7,
 }
 
-QUERY = f"""
-[out:json][timeout:900][maxsize:2000000000];
+STEP = 0.025  # درجة — مربعات صغيرة عشان سيرفرات Overpass متتقلش
+
+
+def query(s, w, n, e):
+    b = f'{s},{w},{n},{e}'
+    return f"""
+[out:json][timeout:180];
 (
-  way["building"]({BBOX[0]},{BBOX[1]},{BBOX[2]},{BBOX[3]});
-  way["highway"~"^({'|'.join(ROAD_TYPES)})$"]({BBOX[0]},{BBOX[1]},{BBOX[2]},{BBOX[3]});
-  way["natural"="coastline"]({BBOX[0]},{BBOX[1]},{BBOX[2]},{BBOX[3]});
-  way["leisure"~"^(park|garden)$"]({BBOX[0]},{BBOX[1]},{BBOX[2]},{BBOX[3]});
+  way["building"]({b});
+  way["highway"~"^({'|'.join(ROAD_TYPES)})$"]({b});
+  way["natural"="coastline"]({b});
+  way["leisure"~"^(park|garden)$"]({b});
 );
 out tags geom qt;
 """
 
 
-def fetch():
-    data = urllib.parse.urlencode({'data': QUERY}).encode()
-    for attempt in range(3):
+def fetch_tile(s, w, n, e):
+    cache = CACHE and os.path.join(CACHE, f'{s:.3f}_{w:.3f}.json')
+    if cache and os.path.exists(cache):
+        with open(cache) as f:
+            return json.load(f)
+    els = fetch_tile_net(s, w, n, e)
+    if cache:
+        os.makedirs(CACHE, exist_ok=True)
+        with open(cache, 'w') as f:
+            json.dump(els, f)
+    return els
+
+
+def fetch_tile_net(s, w, n, e):
+    data = urllib.parse.urlencode({'data': query(s, w, n, e)}).encode()
+    for attempt in range(4):
         for url in MIRRORS:
             try:
-                print('fetching', url, file=sys.stderr)
                 req = urllib.request.Request(url, data=data, headers={'User-Agent': 'markazgame-osm/1.0'})
-                with urllib.request.urlopen(req, timeout=1200) as r:
-                    return json.load(r)
+                with urllib.request.urlopen(req, timeout=300) as r:
+                    return json.load(r)['elements']
             except Exception as e:  # noqa: BLE001
-                print('failed', url, e, file=sys.stderr)
-        time.sleep(30 * (attempt + 1))
-    sys.exit('all Overpass mirrors failed')
+                print('  failed', url, e, file=sys.stderr)
+                time.sleep(5)
+        time.sleep(20 * (attempt + 1))
+    sys.exit(f'all Overpass mirrors failed for tile {s},{w}')
+
+
+def fetch():
+    seen, elements = set(), []
+    lats = [BBOX[0] + i * STEP for i in range(math.ceil((BBOX[2] - BBOX[0]) / STEP))]
+    lons = [BBOX[1] + i * STEP for i in range(math.ceil((BBOX[3] - BBOX[1]) / STEP))]
+    total = len(lats) * len(lons)
+    k = 0
+    for la in lats:
+        for lo in lons:
+            k += 1
+            els = fetch_tile(la, lo, min(la + STEP, BBOX[2]), min(lo + STEP, BBOX[3]))
+            new = [el for el in els if el['id'] not in seen]
+            seen.update(el['id'] for el in new)
+            elements.extend(new)
+            print(f'tile {k}/{total}: +{len(new)} (total {len(elements)})', file=sys.stderr)
+            time.sleep(1)
+    return {'elements': elements}
 
 
 def main():

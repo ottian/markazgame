@@ -35,7 +35,9 @@ Q.tileError = { low: 24, medium: 14, high: 8 }[qKey];
 
 // ---------- الوضع: خريطة اللعبة أو إسكندرية الحقيقية (جوجل 3D) ----------
 const hasGoogle = !!CONFIG.googleMapsApiKey;
-let modeKey = store.get('markaz_mode') === 'real' && hasGoogle ? 'real' : 'grid';
+const hasOsm = await fetch('data/osm/index.json', { method: 'HEAD' }).then((r) => r.ok).catch(() => false);
+const canReal = hasGoogle || hasOsm;
+let modeKey = store.get('markaz_mode') === 'real' && canReal ? 'real' : 'grid';
 const REAL = modeKey === 'real';
 
 // ---------- الإعداد ----------
@@ -71,10 +73,36 @@ resize();
 
 const map = buildMap();
 const world = buildWorld(scene, map, { ...Q, onlySky: REAL });
-let city = null;
+let city = null; // صور جوجل (الأرض)
+let osm = null; // مباني وشوارع OpenStreetMap
+const useGoogle = REAL && hasGoogle && store.get('markaz_google') !== '0';
+let landmarks = [];
 if (REAL) {
-  const { RealCity } = await import('./realcity.js');
-  city = new RealCity(scene, camera, renderer, Q);
+  const R = await import('./realcity.js');
+  landmarks = CONFIG.real.landmarks.map((l) => ({ ...l, ...R.latLonToLocal(l.lat, l.lon, CONFIG.real.center) }));
+  if (useGoogle) city = new R.RealCity(scene, camera, renderer, Q);
+  if (hasOsm) {
+    const O = await import('./osmcity.js');
+    osm = await O.OsmCity.load(CONFIG.real.center);
+    if (osm) scene.add(osm.group);
+    window.__OsmTraffic = O.OsmTraffic;
+  }
+  if (!city) {
+    // أرض بسيطة لو من غير جوجل
+    const ground = new THREE.Mesh(new THREE.PlaneGeometry(30000, 30000), new THREE.MeshLambertMaterial({ color: 0x9a9183 }));
+    ground.rotation.x = -Math.PI / 2;
+    ground.position.y = -0.02;
+    ground.receiveShadow = true;
+    scene.add(ground);
+  }
+}
+function placeName(x, z) {
+  let best = null, bd = Infinity;
+  for (const l of landmarks) {
+    const d = Math.hypot(l.x - x, l.z - z);
+    if (d < bd) { bd = d; best = l; }
+  }
+  return bd < 900 && best ? `قرب ${best.name}` : 'إسكندرية';
 }
 const van = makeVan();
 scene.add(van);
@@ -85,9 +113,11 @@ if (Q.shadows) {
   head.target.position.set(15, 0, 0);
   van.add(head, head.target);
 }
-const traffic = new Traffic(scene, REAL ? [] : map.roads, REAL ? 0 : Q.traffic);
+const traffic = osm
+  ? new window.__OsmTraffic(scene, osm, Math.round(Q.traffic * 0.6))
+  : new Traffic(scene, REAL ? [] : map.roads, REAL ? 0 : Q.traffic);
 const people = REAL
-  ? new People(scene, { walkers: 0, shadows: !!Q.shadows })
+  ? new People(scene, { walkers: osm ? Math.round(Q.peds * 0.6) : 0, shadows: !!Q.shadows })
   : new People(scene, { paths: sidewalkPaths(map), standers: cornicheStanders(), walkers: Q.peds, shadows: Q.shadows >= 2048 });
 const characters = new Characters(scene, people, { low: 8, medium: 16, high: 28 }[qKey]);
 characters.load();
@@ -98,7 +128,7 @@ const centerMarker = makeMarker(0x22e0a8);
 scene.add(pickupMarker, centerMarker);
 pickupMarker.visible = false;
 centerMarker.visible = false;
-const door = REAL ? city.door : tileCenter(CENTER.doorCol, CENTER.doorRow);
+const door = REAL ? { x: 0, z: 0 } : tileCenter(CENTER.doorCol, CENTER.doorRow);
 centerMarker.position.set(door.x, 0, door.z);
 
 // سهم فوق العربية بيشاور على الهدف
@@ -124,7 +154,7 @@ function avatarHTML(s, size = 48) {
 
 // ---------- الحالة ----------
 const player = REAL
-  ? { x: city.start.x, z: city.start.z, heading: city.start.heading, speed: 0, steer: 0, siren: false }
+  ? { x: 0, z: 6, heading: 0, speed: 0, steer: 0, siren: false }
   : { x: door.x + 8, z: door.z + 3, heading: 0, speed: 0, steer: 0, siren: false };
 let groundY = 0;
 const keys = {};
@@ -209,12 +239,18 @@ function renderSettings() {
     const b = document.createElement('button');
     b.className = 'chip' + (k === modeKey ? ' sel' : '');
     b.textContent = label;
-    b.disabled = k === 'real' && !hasGoogle;
-    if (b.disabled) b.title = 'محتاج مفتاح Google Maps في js/config.js';
+    b.disabled = k === 'real' && !canReal;
+    if (b.disabled) b.title = 'محتاج بيانات الخريطة أو مفتاح Google Maps';
     b.onclick = () => { if (k !== modeKey) { store.set('markaz_mode', k); location.reload(); } };
     mbox.appendChild(b);
   }
-  $('modeNote').hidden = hasGoogle;
+  $('modeNote').hidden = canReal;
+  const gt = $('googleToggle');
+  gt.hidden = !(hasGoogle && hasOsm);
+  const gOn = store.get('markaz_google') !== '0';
+  gt.textContent = gOn ? '🛰️ صور جوجل للأرض: شغّالة' : '🛰️ صور جوجل للأرض: مقفولة';
+  gt.classList.toggle('sel', gOn);
+  gt.onclick = () => { store.set('markaz_google', gOn ? '0' : '1'); location.reload(); };
   const v = $('voiceToggle');
   v.textContent = sfx.voice ? '🗣️ الكلام: شغّال' : '🗣️ الكلام: مقفول';
   v.classList.toggle('sel', sfx.voice);
@@ -259,7 +295,17 @@ function hideDialog() { $('dialog').hidden = true; dialogLine = -1; }
 // ---------- المهمّات ----------
 function newMission() {
   if (REAL) {
-    const pk = city.pickupNear();
+    let pk = null;
+    const addr = osm && Math.random() < 0.6 ? osm.randomRoadPoint(player.x, player.z, 300, 1100) : null;
+    if (addr) pk = { pos: addr, name: `عنوان ${placeName(addr.x, addr.z)}` };
+    else {
+      const far = landmarks.filter((l) => Math.hypot(l.x - door.x, l.z - door.z) > 300);
+      const l = far[Math.floor(Math.random() * far.length)] || landmarks[0];
+      let pos = { x: l.x, z: l.z };
+      const nr = osm && osm.nearestRoad(pos.x, pos.z);
+      if (nr && Math.hypot(nr.x - pos.x, nr.z - pos.z) < 150) pos = { x: nr.x, z: nr.z };
+      pk = { pos, name: l.name };
+    }
     const kase = CONFIG.cases[Math.floor(Math.random() * CONFIG.cases.length)];
     const route = Math.hypot(player.x - pk.pos.x, player.z - pk.pos.z) + Math.hypot(pk.pos.x - door.x, pk.pos.z - door.z);
     mission = {
@@ -468,6 +514,7 @@ $('btnNext').addEventListener('click', nextMission);
 // ---------- الفيزيا ----------
 const VAN_LEN = 5.4, VAN_WID = 2.2;
 function blockedAt(x, z, h) {
+  if (osm) return osm.blocked(x, z, h, VAN_LEN, VAN_WID);
   const c = Math.cos(h), s = Math.sin(h);
   const hl = VAN_LEN / 2 - 0.2, hw = VAN_WID / 2 - 0.1;
   for (const [a, b] of [[hl, hw], [hl, -hw], [-hl, hw], [-hl, -hw], [hl, 0], [-hl, 0], [0, hw], [0, -hw]]) {
@@ -501,7 +548,7 @@ function updatePlayer(dt) {
   const nx = player.x + Math.cos(newH) * player.speed * dt;
   const nz = player.z + Math.sin(newH) * player.speed * dt;
 
-  if (REAL) {
+  if (REAL && !osm) {
     if (!city.blocked(player.x, player.z, newH, player.speed)) { player.x = nx; player.z = nz; player.heading = newH; }
     else { player.heading = newH; impact(); }
   } else if (!blockedAt(nx, nz, newH)) {
@@ -532,7 +579,7 @@ function updatePlayer(dt) {
     if (d < 3.6 && d > 0.001) {
       const push = 3.6 - d;
       const tx = player.x + (dx / d) * push, tz = player.z + (dz / d) * push;
-      if (REAL || !blockedAt(tx, tz, player.heading)) { player.x = tx; player.z = tz; }
+      if ((REAL && !osm) || !blockedAt(tx, tz, player.heading)) { player.x = tx; player.z = tz; }
       const p = Math.abs(player.speed);
       if (p > 2) {
         sfx.crash(p / 20);
@@ -580,7 +627,7 @@ function updatePlayer(dt) {
     if (player.siren) { hurt(1.2 * dt); if (tipCooldown <= 0) { toast('🔇 السارينة بتوتّر الحالة — استخدمها في الزحمة بس', 3); tipCooldown = 8; } }
   }
 
-  if (REAL) { groundY = city.groundAt(player.x, player.z, dt); people.groundY = groundY; }
+  if (city) { groundY = city.groundAt(player.x, player.z, dt); people.groundY = groundY; }
   van.position.set(player.x, groundY, player.z);
   van.rotation.y = -player.heading;
   van.rotation.z = clamp(-player.speed * 0.0025 * (back ? -1 : fwd ? 1 : 0), -0.03, 0.03);
@@ -635,7 +682,8 @@ const mmg = mm.getContext('2d');
 function drawMinimap() {
   if (REAL) {
     const target = mission ? (mission.aboard ? door : mission.pos) : null;
-    city.drawMinimap(mmg, mm.width, player, target);
+    if (osm) osm.drawMinimap(mmg, mm.width, player, target, door, landmarks);
+    else city.drawMinimap(mmg, mm.width, player, target);
     return;
   }
   const S = mm.width, half = S / 2;
@@ -688,6 +736,36 @@ let t = 0, frames = 0;
 let pedsOnRoad = [];
 const vehiclesNear = [];
 let crowdCount = 0, crowdTimer = 0, attribTimer = 0;
+
+// ---------- إسكندرية الحقيقية (OSM) ----------
+let osmSnapped = false, osmPedsVersion = -1, recycleTimer = 0;
+function updateOsm(dt) {
+  osm.update(player.x, player.z, qKey === 'high' ? 2 : 1);
+  // أول ما الشوارع حوالين المركز تحمّل: نحط باب المركز والعربية على أقرب شارع
+  if (!osmSnapped && osm.roads.length) {
+    const nr = osm.nearestRoad(0, 0, [2, 3, 4, 5, 6]);
+    if (nr) {
+      osmSnapped = true;
+      door.x = nr.x; door.z = nr.z;
+      centerMarker.position.set(door.x, 0, door.z);
+      if (state !== 'playing' || !mission) {
+        player.x = nr.x; player.z = nr.z; player.heading = nr.heading;
+        camPos.set(player.x - Math.cos(player.heading) * 11, 5, player.z - Math.sin(player.heading) * 11);
+      }
+    }
+  }
+  recycleTimer -= dt;
+  if (recycleTimer <= 0) {
+    recycleTimer = 2;
+    if (osm.version !== osmPedsVersion) {
+      osmPedsVersion = osm.version;
+      people.setPaths(osm.sidewalks());
+      for (const p of people.peds) if (p.kind === 'walk') p.active = true;
+    }
+    people.recycle(player.x, player.z);
+  }
+  if (!city) $('attrib').textContent = '© OpenStreetMap contributors';
+}
 function step(dt) {
   t += dt;
 
@@ -739,7 +817,7 @@ function step(dt) {
   if (state !== 'menu') {
     $('speed').textContent = toArabicDigits(Math.round(Math.abs(player.speed) * 3.6));
     $('score').textContent = toArabicDigits(score);
-    $('district').textContent = '📍 ' + (REAL ? city.placeName(player.x, player.z) : districtAt(player.x).name);
+    $('district').textContent = '📍 ' + (REAL ? placeName(player.x, player.z) : districtAt(player.x).name);
     drawMinimap();
   }
   if (toastTimer > 0) {
@@ -757,7 +835,8 @@ function step(dt) {
   sfx.update(dt, { speed: playing ? player.speed : 0, throttle: playing && keys.up, siren: player.siren && playing, skid, seaDist: REAL ? 999 : Math.max(0, player.z - 4 * TILE), crowd: crowdCount, active: playing });
   world.follow(player.x, player.z);
   characters.update(dt, camera.position.x, camera.position.z, groundY);
-  if (REAL) {
+  if (osm) updateOsm(dt);
+  if (city) {
     city.update(player.x, player.z);
     centerMarker.position.y = groundY;
     if (city.error && !city.errorShown) {
@@ -765,7 +844,7 @@ function step(dt) {
       toast('⚠️ مباني جوجل مش بتحمّل — اتأكد من المفتاح وإن Map Tiles API مفعّل', 8);
     }
     attribTimer -= dt;
-    if (attribTimer <= 0) { attribTimer = 2; $('attrib').textContent = 'Google · ' + city.attributions(); }
+    if (attribTimer <= 0) { attribTimer = 2; $('attrib').textContent = (osm ? '© OpenStreetMap contributors · ' : '') + 'Google · ' + city.attributions(); }
   }
   world.update(t, camera.position);
 }

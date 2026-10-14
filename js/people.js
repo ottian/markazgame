@@ -19,9 +19,30 @@ const PARTS = {
 
 const pick = (arr, r) => arr[Math.floor(r() * arr.length)];
 
+// مسار = خط متكسّر (pts = [x0,z0,x1,z1,...]) — أو قطعة {ax,az,bx,bz}
+export function makePath(p) {
+  const pts = p.pts || [p.ax, p.az, p.bx, p.bz];
+  const cum = [0];
+  for (let i = 2; i < pts.length; i += 2) cum.push(cum[cum.length - 1] + Math.hypot(pts[i] - pts[i - 2], pts[i + 1] - pts[i - 1]));
+  return { pts, cum, len: cum[cum.length - 1] };
+}
+
+function pointAt(path, t, out) {
+  const { pts, cum } = path;
+  let i = 1;
+  while (i < cum.length - 1 && cum[i] < t) i++;
+  const seg = cum[i] - cum[i - 1] || 1;
+  const u = Math.min(1, Math.max(0, (t - cum[i - 1]) / seg));
+  const ax = pts[(i - 1) * 2], az = pts[(i - 1) * 2 + 1], bx = pts[i * 2], bz = pts[i * 2 + 1];
+  out.x = ax + (bx - ax) * u;
+  out.z = az + (bz - az) * u;
+  out.yaw = Math.atan2(bz - az, bx - ax);
+  return out;
+}
+
 export class People {
   constructor(scene, { paths = [], standers = [], walkers = 220, shadows = false }) {
-    this.paths = paths.map((p) => ({ ...p, len: Math.hypot(p.bx - p.ax, p.bz - p.az) })).filter((p) => p.len > 4);
+    this.paths = paths.map(makePath).filter((p) => p.len > 4);
     const totalLen = this.paths.reduce((s, p) => s + p.len, 0);
     this.peds = [];
     const rand = Math.random;
@@ -30,6 +51,13 @@ export class People {
       let k = rand() * totalLen, path = this.paths[0];
       for (const p of this.paths) { k -= p.len; if (k <= 0) { path = p; break; } }
       this.peds.push(this.makePed(rand, { kind: 'walk', path, t: rand() * path.len, dir: rand() < 0.5 ? 1 : -1 }));
+    }
+    // ناس من غير مسارات لسه (الخريطة الحقيقية بتحمّل بعدين)
+    for (let i = this.peds.length; i < walkers; i++) {
+      const p = this.makePed(rand, { kind: 'walk' });
+      p.path = null;
+      p.active = false;
+      this.peds.push(p);
     }
     for (const s of standers) this.peds.push(this.makePed(rand, { kind: 'stand', x: s.x, z: s.z, yaw: s.yaw, fisher: !!s.fisher }));
     // خانات فاضية للي بيعدّوا الشارع وللممثلين (الفريق والحالة)
@@ -124,6 +152,25 @@ export class People {
     for (const m of Object.values(this.meshes)) m.instanceColor.needsUpdate = true;
   }
 
+  // ---------- الخريطة الحقيقية: الناس بتتنقل حوالين اللاعب ----------
+  setPaths(paths) {
+    this.paths = paths.map(makePath).filter((p) => p.len > 4);
+  }
+
+  // اللي بعدوا عن اللاعب بنحطّهم على رصيف قريب
+  recycle(px, pz, maxDist = 230) {
+    if (!this.paths.length) return;
+    const near = this.paths.filter((p) => Math.abs(p.pts[0] - px) < 200 && Math.abs(p.pts[1] - pz) < 200);
+    const pool = near.length ? near : this.paths;
+    for (const p of this.peds) {
+      if (p.kind !== 'walk') continue;
+      if (p.path && Math.abs(p.x - px) < maxDist && Math.abs(p.z - pz) < maxDist) continue;
+      p.path = pool[Math.floor(Math.random() * pool.length)];
+      p.t = Math.random() * p.path.len;
+      pointAt(p.path, p.t, p);
+    }
+  }
+
   // ---------- الممثلين (الفريق والحالة والأسرة) ----------
   addActor({ x, z, yaw = 0, shirt, pants, head = null, skin, role = null }) {
     const a = this.actorSlots.find((p) => !p.active);
@@ -168,16 +215,15 @@ export class People {
     for (const p of this.peds) {
       if (!p.active) continue;
       if (p.kind === 'walk') {
+        if (!p.path) continue;
         if (p.pause > 0) { p.pause -= dt; p.walking = false; } else p.walking = true;
         if (p.walking) {
           p.t += p.speed * p.dir * dt;
           if (p.t > p.path.len) { p.t = p.path.len; p.dir = -1; p.pause = Math.random() * 3; }
           if (p.t < 0) { p.t = 0; p.dir = 1; p.pause = Math.random() * 3; }
         }
-        const u = p.t / p.path.len;
-        p.x = p.path.ax + (p.path.bx - p.path.ax) * u;
-        p.z = p.path.az + (p.path.bz - p.path.az) * u;
-        p.yaw = Math.atan2(p.path.bz - p.path.az, p.path.bx - p.path.ax) + (p.dir < 0 ? Math.PI : 0);
+        pointAt(p.path, p.t, p);
+        if (p.dir < 0) p.yaw += Math.PI;
       } else if (p.target) {
         // بيستنّى لو فيه عربية جاية قريب منه
         let wait = false;
