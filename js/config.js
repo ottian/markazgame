@@ -21,8 +21,8 @@ export const CONFIG = {
   googleMapsApiKey: 'AIzaSyBfFuKLmpspUp6i8Vvuq4c5kCiWhJ8ynGE',
 
   real: {
-    // مكان المركز — ⚠️ تقريبي، غيّره للإحداثيات الحقيقية من جوجل ماب
-    center: { lat: 31.2152, lon: 29.9469 },
+    // مكان المركز (من جوجل ماب)
+    center: { lat: 31.229128, lon: 29.958118 },
     // أماكن البلاغات (إحداثيات تقريبية)
     landmarks: [
       { name: 'محطة الرمل', short: 'الرمل', lat: 31.2003, lon: 29.9010 },
