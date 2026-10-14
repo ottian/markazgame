@@ -9,7 +9,7 @@
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;700;900&display=swap">
   <link rel="stylesheet" href="css/style.css">
   <script type="importmap">
-    { "imports": { "three": "./vendor/three.module.min.js" } }
+    { "imports": { "three": "./vendor/three.module.min.js", "three/addons/": "./vendor/addons/" } }
   </script>
 </head>
 <body>
@@ -24,6 +24,11 @@
       <p id="centerName" class="center-name"></p>
       <h3>اختار السواق</h3>
       <div id="drivers" class="drivers"></div>
+      <h3>الإعدادات</h3>
+      <div class="settings">
+        <span>الجرافيكس:</span><div id="quality" class="chips"></div>
+        <button id="voiceToggle" class="chip"></button>
+      </div>
       <button id="btnStart" class="btn primary">ابدأ الوردية ▶</button>
       <div class="help">
         <span>⬆️⬇️⬅️➡️ أو WASD: السواقة</span>

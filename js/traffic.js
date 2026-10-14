@@ -27,6 +27,7 @@ export class Traffic {
   constructor(scene, roads, count = 70) {
     this.lanes = buildLanes(roads);
     this.cars = [];
+    this.honks = [];
     const totalLen = this.lanes.reduce((s, l) => s + (l.to - l.from), 0);
     for (let i = 0; i < count; i++) {
       // اختيار حارة بالتناسب مع طولها
@@ -44,7 +45,7 @@ export class Traffic {
         max: 9 + Math.random() * 7, // م/ث
         mesh,
         x: 0, z: 0, heading: 0,
-        stuck: 0, ghost: 0, bump: 0,
+        stuck: 0, ghost: 0, bump: 0, blocked: 0,
       };
       this.place(car);
       this.cars.push(car);
@@ -67,7 +68,7 @@ export class Traffic {
     car.mesh.rotation.y = -car.heading;
   }
 
-  update(dt, player) {
+  update(dt, player, peds = []) {
     const cars = this.cars;
     for (const c of cars) {
       const fx = Math.cos(c.heading), fz = Math.sin(c.heading);
@@ -91,9 +92,22 @@ export class Traffic {
         const dx = player.x - c.x, dz = player.z - c.z;
         const ahead = dx * fx + dz * fz;
         const lat = Math.abs(-dx * fz + dz * fx);
-        if (ahead > 0 && ahead < 13 && lat < 3) target = 0;
+        if (ahead > 0 && ahead < 13 && lat < 3) {
+          target = 0;
+          // واقف ورا اللاعب كتير؟ يضرب كلاكس
+          c.blocked += dt;
+          if (c.blocked > 2.5) { c.blocked = -2 - Math.random() * 3; this.honks.push(c); }
+        } else if (c.blocked > 0) c.blocked = 0;
+        else c.blocked = Math.min(0, c.blocked + dt);
         // السارينة: العربيات تهدّي وتفسح
         if (player.siren && dx * dx + dz * dz < 60 * 60) target = Math.min(target, 3);
+      }
+
+      // مشاة بيعدّوا قدّامه
+      for (const p of peds) {
+        const dx = p.x - c.x, dz = p.z - c.z;
+        const ahead = dx * fx + dz * fz;
+        if (ahead > 0 && ahead < 10 && Math.abs(-dx * fz + dz * fx) < 2.6) { target = 0; break; }
       }
 
       if (c.speed < 0.3 && target === 0) {

@@ -46,6 +46,13 @@ h3 { margin: 18px 0 8px; font-size: 16px; color: var(--gold); }
 .btn.primary:active { transform: translateY(2px); box-shadow: 0 2px 0 #8a6a00; }
 .help { display: flex; flex-wrap: wrap; gap: 6px 14px; justify-content: center; margin-top: 16px; font-size: 13px; opacity: 0.8; }
 .best { opacity: 0.8; font-size: 14px; }
+.settings { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: center; font-size: 14px; }
+.chips { display: flex; gap: 6px; }
+.chip {
+  font: inherit; font-size: 14px; font-weight: 700; color: var(--text); cursor: pointer;
+  background: rgba(255, 255, 255, 0.08); border: 2px solid transparent; border-radius: 20px; padding: 4px 14px;
+}
+.chip.sel { border-color: var(--gold); background: rgba(242, 194, 48, 0.18); }
 
 /* HUD */
 #hud { position: fixed; inset: 0; pointer-events: none; z-index: 10; }

@@ -116,16 +116,25 @@ function makeSkyDome() {
   return m;
 }
 
-export function buildWorld(scene, map) {
+export function buildWorld(scene, map, quality = { shadows: 0 }) {
   const rand = rng(7);
   const sky = makeSkyDome();
   scene.add(sky);
   scene.fog = new THREE.Fog(0x6a4a66, 120, 620);
 
   scene.add(new THREE.HemisphereLight(0xffd2b0, 0x30283a, 1.1));
-  const sun = new THREE.DirectionalLight(0xffa96b, 1.6);
-  sun.position.set(-300, 120, -260);
-  scene.add(sun);
+  const sun = new THREE.DirectionalLight(0xffa96b, 2.0);
+  const SUN_DIR = new THREE.Vector3(-0.72, 0.42, -0.55).normalize();
+  sun.position.copy(SUN_DIR).multiplyScalar(200);
+  if (quality.shadows) {
+    sun.castShadow = true;
+    sun.shadow.mapSize.set(quality.shadows, quality.shadows);
+    const sc = sun.shadow.camera;
+    sc.left = -70; sc.right = 70; sc.top = 70; sc.bottom = -70; sc.near = 10; sc.far = 450;
+    sun.shadow.bias = -0.0006;
+    sun.shadow.normalBias = 0.4;
+  }
+  scene.add(sun, sun.target);
 
   // الأرض (رصيف)
   const ground = new THREE.Mesh(
@@ -134,13 +143,31 @@ export function buildWorld(scene, map) {
   );
   ground.rotation.x = -Math.PI / 2;
   ground.position.set(W / 2, -0.05, H / 2);
+  ground.receiveShadow = true;
   scene.add(ground);
 
   // البحر
-  const seaMat = new THREE.MeshPhongMaterial({ color: 0x1d4f7a, shininess: 90, specular: 0xffa060 });
-  const sea = new THREE.Mesh(new THREE.PlaneGeometry(W + 3000, 1500), seaMat);
-  sea.rotation.x = -Math.PI / 2;
-  sea.position.set(W / 2, -0.6, 4 * TILE - 750);
+  // بحر بموج متحرك (موج في الـ vertex shader)
+  const timeU = { value: 0 };
+  const seaMat = new THREE.MeshStandardMaterial({ color: 0x0f3a5e, roughness: 0.12, metalness: 0.2 });
+  seaMat.onBeforeCompile = (sh) => {
+    sh.uniforms.uTime = timeU;
+    const waves = `
+      float a1 = position.x * 0.07 + uTime * 1.1;
+      float a2 = position.z * 0.10 - uTime * 1.6 + position.x * 0.03;
+      float a3 = (position.x + position.z) * 0.23 + uTime * 2.3;`;
+    sh.vertexShader = 'uniform float uTime;\n' + sh.vertexShader
+      .replace('#include <beginnormal_vertex>', `${waves}
+      float dX = cos(a1) * 0.4 * 0.07 + cos(a2) * 0.3 * 0.03 + cos(a3) * 0.08 * 0.23;
+      float dZ = cos(a2) * 0.3 * 0.10 + cos(a3) * 0.08 * 0.23;
+      vec3 objectNormal = normalize(vec3(-dX, 1.0, -dZ));`)
+      .replace('#include <begin_vertex>', `vec3 transformed = vec3(position);
+      transformed.y += sin(a1) * 0.4 + sin(a2) * 0.3 + sin(a3) * 0.08;`);
+  };
+  const seaGeo = new THREE.PlaneGeometry(W + 3000, 1500, 260, 90);
+  seaGeo.rotateX(-Math.PI / 2);
+  const sea = new THREE.Mesh(seaGeo, seaMat);
+  sea.position.set(W / 2, -0.8, 4 * TILE - 750);
   scene.add(sea);
 
   // بحيرة مريوط
@@ -175,6 +202,7 @@ export function buildWorld(scene, map) {
       dummy.updateMatrix();
       mesh.setMatrixAt(i, dummy.matrix);
     });
+    mesh.receiveShadow = true;
     scene.add(mesh);
     return mesh;
   };
@@ -242,7 +270,7 @@ export function buildWorld(scene, map) {
     );
     const lamp = new THREE.InstancedMesh(
       new THREE.SphereGeometry(0.35, 8, 6),
-      new THREE.MeshBasicMaterial({ color: 0xffd28a }),
+      new THREE.MeshStandardMaterial({ color: 0xffd28a, emissive: 0xffc070, emissiveIntensity: 3 }),
       n,
     );
     for (let c = 0; c < n; c++) {
@@ -324,6 +352,8 @@ export function buildWorld(scene, map) {
     const geo = new THREE.BoxGeometry(10, h, 10);
     geo.translate(0, h / 2, 0);
     const mesh = new THREE.InstancedMesh(geo, [side, side, roofMat, roofMat, side, side], tiles.length);
+    mesh.castShadow = !!quality.shadows;
+    mesh.receiveShadow = !!quality.shadows;
     tiles.forEach(([c, r], i) => {
       dummy.rotation.set(0, 0, 0);
       dummy.scale.set(1, 1, 1);
@@ -425,12 +455,19 @@ export function buildWorld(scene, map) {
     scene.add(fort);
   }
 
+  buildCorniche(scene, rand);
+
   return {
     sky,
     sea,
+    // الشمس بتمشي ورا اللاعب عشان الظل يفضل حواليه
+    follow(x, z) {
+      sun.target.position.set(x, 0, z);
+      sun.position.set(x + SUN_DIR.x * 200, SUN_DIR.y * 200, z + SUN_DIR.z * 200);
+    },
     update(t, camPos) {
       sky.position.copy(camPos);
-      seaMat.color.setHSL(0.58, 0.6, 0.27 + Math.sin(t * 0.6) * 0.01);
+      timeU.value = t;
     },
   };
 }
@@ -465,4 +502,47 @@ export function makePerson(shirt) {
   head.position.y = 2.05;
   g.add(body, legs, head);
   return g;
+}
+
+// كراسي وعربيات درة مشوي على الكورنيش
+function buildCorniche(scene, rand) {
+  const z = 4 * TILE;
+  const benchMat = new THREE.MeshStandardMaterial({ color: 0x5a3b22, roughness: 0.8 });
+  const n = Math.floor(COLS / 2);
+  const bench = new THREE.InstancedMesh(new THREE.BoxGeometry(2.2, 0.5, 0.6).translate(0, 0.45, 0), benchMat, n);
+  const back = new THREE.InstancedMesh(new THREE.BoxGeometry(2.2, 0.6, 0.12).translate(0, 0.95, -0.25), benchMat, n);
+  const d = new THREE.Object3D();
+  for (let i = 0; i < n; i++) {
+    d.position.set((i * 2 + 1.5) * TILE, 0, z + 2.2);
+    d.updateMatrix();
+    bench.setMatrixAt(i, d.matrix);
+    back.setMatrixAt(i, d.matrix);
+  }
+  bench.castShadow = back.castShadow = true;
+  scene.add(bench, back);
+
+  const cartMat = new THREE.MeshStandardMaterial({ color: 0x2f6fa8, roughness: 0.6 });
+  const coal = new THREE.MeshStandardMaterial({ color: 0x331100, emissive: 0xff5a10, emissiveIntensity: 2.5 });
+  const wheelM = new THREE.MeshStandardMaterial({ color: 0x222222 });
+  const umbM = new THREE.MeshStandardMaterial({ color: 0xd43a2a, roughness: 0.7, side: THREE.DoubleSide });
+  for (let c = 3; c < COLS; c += 7 + Math.floor(rand() * 5)) {
+    const g = new THREE.Group();
+    const box = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.8, 0.8), cartMat);
+    box.position.y = 0.9;
+    const fire = new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.1, 0.5), coal);
+    fire.position.y = 1.35;
+    const umb = new THREE.Mesh(new THREE.ConeGeometry(1.4, 0.5, 8, 1, true), umbM);
+    umb.position.y = 2.6;
+    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 1.4), wheelM);
+    pole.position.y = 1.9;
+    g.add(box, fire, umb, pole);
+    for (const s of [1, -1]) {
+      const w = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 0.08, 10).rotateX(Math.PI / 2), wheelM);
+      w.position.set(0, 0.3, s * 0.45);
+      g.add(w);
+    }
+    g.position.set((c + 0.5) * TILE, 0, z + 7.5);
+    g.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+    scene.add(g);
+  }
 }

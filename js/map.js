@@ -156,3 +156,56 @@ export function randomPickup(map, district, rand = Math.random) {
   if (!cands.length) return null;
   return cands[Math.floor(rand() * cands.length)];
 }
+
+// ---------- مسارات المشاة ----------
+// أرصفة على جنبي كل طريق رئيسي + ممشى الكورنيش
+export function sidewalkPaths(map) {
+  const out = [];
+  const OFF = TILE / 2 + 0.6;
+  for (const rd of map.roads) {
+    const a = rd.a * TILE, b = (rd.b + 1) * TILE;
+    if (rd.dir === 'h') {
+      if (rd.line === 5) continue;
+      if (rd.line === 6) { out.push({ ax: a, az: 7 * TILE + 0.6, bx: b, bz: 7 * TILE + 0.6 }); continue; }
+      const zc = (rd.line + 0.5) * TILE;
+      out.push({ ax: a, az: zc - OFF, bx: b, bz: zc - OFF }, { ax: a, az: zc + OFF, bx: b, bz: zc + OFF });
+    } else {
+      const xc = (rd.line + 0.5) * TILE;
+      out.push({ ax: xc - OFF, az: a, bx: xc - OFF, bz: b }, { ax: xc + OFF, az: a, bx: xc + OFF, bz: b });
+    }
+  }
+  // ممشى الكورنيش (أطول ومزدحم أكتر)
+  for (const z of [4 * TILE + 3.5, 4 * TILE + 5.5, 4 * TILE + 9]) {
+    for (let c = 0; c < COLS; c += 12) out.push({ ax: c * TILE, az: z, bx: Math.min(COLS, c + 12) * TILE, bz: z });
+  }
+  return out;
+}
+
+// صيادين واقفين على سور الكورنيش باصّين للبحر
+export function cornicheStanders(rand = Math.random) {
+  const out = [];
+  for (let x = 6; x < COLS * TILE; x += 9 + rand() * 18) out.push({ x, z: 4 * TILE + 1.0, yaw: -Math.PI / 2, fisher: rand() < 0.7 });
+  return out;
+}
+
+// مكان عبور مشاة قدّام اللاعب: بيرجّع خط من رصيف لرصيف
+export function crossingAhead(map, x, z, heading, dist) {
+  const px = x + Math.cos(heading) * dist, pz = z + Math.sin(heading) * dist;
+  const c = Math.floor(px / TILE), r = Math.floor(pz / TILE);
+  if (tileAt(map, c, r) !== T.ROAD) return null;
+  const road = (cc, rr) => tileAt(map, cc, rr) === T.ROAD;
+  if (r === 5 || r === 6) {
+    // عبور الكورنيش من الممشى للرصيف التاني
+    const flip = Math.random() < 0.5;
+    const a = { x: px, z: 4 * TILE + 11.4 }, b = { x: px + (Math.random() - 0.5) * 4, z: 7 * TILE + 0.6 };
+    return flip ? { ax: b.x, az: b.z, bx: a.x, bz: a.z } : { ax: a.x, az: a.z, bx: b.x, bz: b.z };
+  }
+  const horiz = road(c - 1, r) && road(c + 1, r) && !road(c, r - 1) && !road(c, r + 1);
+  const vert = road(c, r - 1) && road(c, r + 1) && !road(c - 1, r) && !road(c + 1, r);
+  const flip = Math.random() < 0.5;
+  let seg = null;
+  if (horiz) seg = { ax: px, az: r * TILE - 0.6, bx: px, bz: (r + 1) * TILE + 0.6 };
+  else if (vert) seg = { ax: c * TILE - 0.6, az: pz, bx: (c + 1) * TILE + 0.6, bz: pz };
+  if (!seg) return null;
+  return flip ? { ax: seg.bx, az: seg.bz, bx: seg.ax, bz: seg.az } : seg;
+}

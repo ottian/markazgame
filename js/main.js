@@ -1,6 +1,11 @@
 import * as THREE from 'three';
-import { TILE, COLS, ROWS, T, CENTER, DISTRICTS, buildMap, solidAt, tileAt, districtAt, tileCenter, randomPickup } from './map.js';
-import { buildWorld, makeMarker, makePerson } from './world.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { TILE, COLS, ROWS, T, CENTER, DISTRICTS, buildMap, solidAt, tileAt, districtAt, tileCenter, randomPickup, sidewalkPaths, cornicheStanders, crossingAhead } from './map.js';
+import { buildWorld, makeMarker } from './world.js';
+import { People } from './people.js';
 import { makeVan } from './vehicles.js';
 import { Traffic } from './traffic.js';
 import { Sfx } from './audio.js';
@@ -10,20 +15,46 @@ const $ = (id) => document.getElementById(id);
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const toArabicDigits = (n) => String(n).replace(/\d/g, (d) => '٠١٢٣٤٥٦٧٨٩'[d]);
 
+const store = {
+  get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch { /* ignore */ } },
+};
+
+// ---------- الجودة ----------
+const QUALITY = {
+  low: { label: 'منخفضة', pr: 1, shadows: 0, bloom: false, peds: 110, traffic: 50 },
+  medium: { label: 'متوسطة', pr: 1.25, shadows: 1024, bloom: true, peds: 200, traffic: 70 },
+  high: { label: 'عالية', pr: 2, shadows: 2048, bloom: true, peds: 300, traffic: 90 },
+};
+const isTouch = matchMedia('(pointer: coarse)').matches;
+let qKey = store.get('markaz_quality');
+if (!QUALITY[qKey]) qKey = isTouch ? 'low' : 'medium';
+const Q = QUALITY[qKey];
+
 // ---------- الإعداد ----------
 const canvas = $('game');
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: !Q.bloom, powerPreference: 'high-performance' });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, Q.pr));
+renderer.shadowMap.enabled = !!Q.shadows;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.05;
 
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(62, 1, 0.5, 2500);
+let composer = null;
+if (Q.bloom) {
+  composer = new EffectComposer(renderer);
+  composer.addPass(new RenderPass(scene, camera));
+  composer.addPass(new UnrealBloomPass(new THREE.Vector2(256, 256), 0.55, 0.45, 0.85));
+  composer.addPass(new OutputPass());
+}
 
 function resize() {
   const w = window.innerWidth, h = window.innerHeight;
   renderer.setSize(w, h, false);
+  if (composer) { composer.setPixelRatio(renderer.getPixelRatio()); composer.setSize(w, h); }
   camera.aspect = w / h;
   camera.fov = w < h ? 75 : 62;
   camera.updateProjectionMatrix();
@@ -32,10 +63,18 @@ window.addEventListener('resize', resize);
 resize();
 
 const map = buildMap();
-const world = buildWorld(scene, map);
+const world = buildWorld(scene, map, Q);
 const van = makeVan();
 scene.add(van);
-const traffic = new Traffic(scene, map.roads, 80);
+if (Q.shadows) {
+  // نور الفوانيس القدّامية
+  const head = new THREE.SpotLight(0xfff0d0, 40, 45, 0.5, 0.6, 1.5);
+  head.position.set(2.6, 1.0, 0);
+  head.target.position.set(15, 0, 0);
+  van.add(head, head.target);
+}
+const traffic = new Traffic(scene, map.roads, Q.traffic);
+const people = new People(scene, { paths: sidewalkPaths(map), standers: cornicheStanders(), walkers: Q.peds, shadows: Q.shadows >= 2048 });
 const sfx = new Sfx();
 
 const pickupMarker = makeMarker(0xff8a1f);
@@ -53,11 +92,8 @@ const arrow = new THREE.Mesh(
 );
 scene.add(arrow);
 
-// أشخاص عند مكان الاستلام
-const patient = makePerson(0x7aa0c8);
-const family = makePerson(0xa05a7a);
-scene.add(patient, family);
-patient.visible = family.visible = false;
+// أشخاص عند مكان الاستلام (الحالة والأسرة والفريق)
+let cast = {};
 
 // ---------- الفريق ----------
 const staffBy = (role) => CONFIG.staff.filter((s) => s.role === role);
@@ -138,6 +174,23 @@ function renderDriverPicker() {
   }
 }
 renderDriverPicker();
+function renderSettings() {
+  const box = $('quality');
+  box.innerHTML = '';
+  for (const [k, q] of Object.entries(QUALITY)) {
+    const b = document.createElement('button');
+    b.className = 'chip' + (k === qKey ? ' sel' : '');
+    b.textContent = q.label;
+    b.onclick = () => { if (k !== qKey) { store.set('markaz_quality', k); location.reload(); } };
+    box.appendChild(b);
+  }
+  const v = $('voiceToggle');
+  v.textContent = sfx.voice ? '🗣️ الكلام: شغّال' : '🗣️ الكلام: مقفول';
+  v.classList.toggle('sel', sfx.voice);
+  v.onclick = () => { sfx.voice = !sfx.voice; store.set('markaz_voice', sfx.voice ? '1' : '0'); renderSettings(); };
+}
+sfx.voice = store.get('markaz_voice') !== '0';
+renderSettings();
 $('centerName').textContent = CONFIG.centerName;
 $('bestScore').textContent = toArabicDigits(best);
 $('btnStart').addEventListener('click', startGame);
@@ -146,12 +199,13 @@ function startGame() {
   sfx.init();
   $('menu').hidden = true;
   $('hud').hidden = false;
-  if (matchMedia('(pointer: coarse)').matches) $('touch').hidden = false;
+  if (isTouch) $('touch').hidden = false;
   $('driverCard').innerHTML = `${avatarHTML(driver, 40)}<div><b>${driver.name}</b><small>${driver.title}</small></div>`;
   state = 'playing';
   camPos.set(player.x - 11, 5, player.z);
   camLook.set(player.x + 8, 1.6, player.z);
   toast(`أهلاً ${driver.name}! استنّى أول بلاغ...`);
+  sfx.speak(`أهلاً يا ${driver.name}. استنّى أول بلاغ.`);
 }
 
 // ---------- رسائل ----------
@@ -165,6 +219,7 @@ function toast(msg, secs = 3.5) {
 
 let dialogLine = -1;
 function say(staff, text) {
+  sfx.speak(text, { pitch: staff.role === 'nurse' ? 1.15 : 0.95 });
   $('dialog').hidden = false;
   $('dialog').innerHTML = `${avatarHTML(staff, 52)}<div><b>${staff.name} <small>${staff.title}</small></b><p>${text}</p></div>`;
 }
@@ -186,12 +241,14 @@ function newMission() {
       limit: Math.round(route / 11 + 35 + kase.calm),
       elapsed: 0, comfort: 100, hits: 0, calm: 0, handover: 0, aboard: false,
     };
+    people.clearActors();
     placePeople(p, pos);
     pickupMarker.position.set(pos.x, 0, pos.z);
     pickupMarker.visible = true;
     centerMarker.visible = false;
-    sfx.call();
+    sfx.radio();
     toast(`📞 بلاغ جديد من ${d.name}`, 5);
+    setTimeout(() => sfx.speak(`بلاغ جديد من ${d.name}. ${kase.text}`), 700);
     $('missionCase').textContent = kase.text;
     state = 'playing';
     return;
@@ -202,11 +259,38 @@ function placePeople(p, pos) {
   // الناس واقفين على الرصيف ناحية المبنى
   const dirs = [[0, -1], [0, 1], [-1, 0], [1, 0]];
   let d = dirs.find(([dc, dr]) => tileAt(map, p.c + dc, p.r + dr) === T.BUILDING) || [0, -1];
-  const ox = pos.x + d[0] * 5.6, oz = pos.z + d[1] * 5.6;
+  const ox = pos.x + d[0] * 6.4, oz = pos.z + d[1] * 6.4;
   const side = [-d[1], d[0]];
-  patient.position.set(ox + side[0] * 0.8, 0, oz + side[1] * 0.8);
-  family.position.set(ox - side[0] * 0.8, 0, oz - side[1] * 0.8);
-  patient.visible = family.visible = true;
+  const faceRoad = Math.atan2(-d[1], -d[0]);
+  cast = {
+    spot: { x: ox, z: oz, faceRoad, side },
+    patient: people.addActor({ x: ox + side[0] * 0.7, z: oz + side[1] * 0.7, yaw: faceRoad, shirt: 0x7aa0c8, pants: 0x2b3245 }),
+    family: people.addActor({ x: ox - side[0] * 0.7, z: oz - side[1] * 0.7, yaw: faceRoad, shirt: 0x6a3a5a, pants: 0x6a3a5a, head: 0x3a2a3a }),
+    family2: people.addActor({ x: ox - side[0] * 1.6, z: oz - side[1] * 1.6 + 0.3, yaw: faceRoad, shirt: 0xe6e1d3, pants: 0xe6e1d3 }),
+  };
+}
+
+// الدكتور والممرض بينزلوا من العربية ويروحوا للحالة
+function teamOut() {
+  const rx = player.x - Math.cos(player.heading) * 3.4, rz = player.z - Math.sin(player.heading) * 3.4;
+  const s = cast.spot;
+  cast.doctor = people.addActor({ x: rx, z: rz, shirt: 0xf6f6f6, pants: 0x2b3245 });
+  cast.nurse = people.addActor({ x: rx + 0.5, z: rz + 0.5, shirt: 0x1f9a8a, pants: 0x1f9a8a });
+  const fwd = [-s.side[1], s.side[0]];
+  people.walkTo(cast.doctor, s.x + fwd[0] * 1.2 + s.side[0] * 0.2, s.z + fwd[1] * 1.2 + s.side[1] * 0.2, (a) => { a.yaw = Math.atan2(s.z - a.z, s.x - a.x); });
+  people.walkTo(cast.nurse, s.x + fwd[0] * 1.2 + s.side[0] * 1.4, s.z + fwd[1] * 1.2 + s.side[1] * 1.4, (a) => { a.yaw = Math.atan2(s.z - a.z, s.x - a.x); });
+}
+
+// الحالة والفريق بيركبوا من الباب اللي ورا
+function boardVan(done) {
+  const rx = player.x - Math.cos(player.heading) * 3.4, rz = player.z - Math.sin(player.heading) * 3.4;
+  let left = 0;
+  for (const a of [cast.patient, cast.doctor, cast.nurse]) {
+    if (!a) continue;
+    left++;
+    people.walkTo(a, rx, rz, () => { people.removeActor(a); if (--left === 0) done(); });
+  }
+  if (!left) done();
 }
 
 function updateMission(dt) {
@@ -231,7 +315,11 @@ function updateMission(dt) {
 
   if (!m.aboard) {
     $('objective').textContent = `روح لـ ${m.district.name} (العلامة البرتقاني)`;
-    if (dist < 6.5 && stopped) {
+    if (m.boarding) {
+      $('progressLabel').textContent = 'الحالة بتركب العربية...';
+      if (!stopped || dist > 8) { people.clearActors(); finishBoarding(); }
+    } else if (dist < 6.5 && stopped) {
+      if (!m.teamOut) { m.teamOut = true; teamOut(); }
       m.calm += dt;
       const frac = m.calm / m.kase.calm;
       $('progress').hidden = false;
@@ -245,14 +333,8 @@ function updateMission(dt) {
         if (line === 2) say(pick('social'), 'الأسرة مطمّنة وجاية ورانا. يلا بينا على المركز بالراحة.');
       }
       if (frac >= 1) {
-        m.aboard = true;
-        patient.visible = false;
-        pickupMarker.visible = false;
-        centerMarker.visible = true;
-        $('progress').hidden = true;
-        sfx.ding();
-        toast('✅ الحالة ركبت — سوق بهدوء ورجّعها المركز', 4);
-        setTimeout(hideDialog, 2500);
+        m.boarding = true;
+        boardVan(finishBoarding);
       }
     } else if (m.calm > 0 && m.calm < m.kase.calm) {
       $('progressLabel').textContent = 'اقف جوّه الدايرة عشان الفريق يكمّل';
@@ -276,6 +358,19 @@ function updateMission(dt) {
   $('comfortBar').style.background = m.comfort > 70 ? '#3ad29f' : m.comfort > 40 ? '#f2c230' : '#ff5a4a';
 }
 
+function finishBoarding() {
+  const m = mission;
+  if (!m || m.aboard) return;
+  m.boarding = false;
+  m.aboard = true;
+  pickupMarker.visible = false;
+  centerMarker.visible = true;
+  $('progress').hidden = true;
+  sfx.ding();
+  toast('✅ الحالة ركبت — سوق بهدوء ورجّعها المركز', 4);
+  setTimeout(hideDialog, 2500);
+}
+
 function finishMission() {
   const m = mission;
   const remain = Math.max(0, m.limit - m.elapsed);
@@ -290,7 +385,7 @@ function finishMission() {
   }
   const stars = m.comfort >= 85 ? 3 : m.comfort >= 60 ? 2 : 1;
   sfx.ding();
-  family.visible = false;
+  people.clearActors();
   centerMarker.visible = false;
   $('progress').hidden = true;
   $('comfortWrap').hidden = true;
@@ -393,6 +488,31 @@ function updatePlayer(dt) {
       }
       player.speed *= -0.3;
     }
+  }
+
+  // المشاة اللي بيعدّوا
+  const c0 = Math.cos(player.heading), s0 = Math.sin(player.heading);
+  for (const p of pedsOnRoad) {
+    const dx = p.x - player.x, dz = p.z - player.z;
+    const a = dx * c0 + dz * s0, b = -dx * s0 + dz * c0;
+    if (Math.abs(a) < 3.1 && Math.abs(b) < 1.5 && Math.abs(player.speed) > 1) {
+      // الشخص بيتنطّ لورا ويتفادى العربية
+      const side = b >= 0 ? 1 : -1;
+      p.x += -s0 * side * 2.2; p.z += c0 * side * 2.2;
+      if (p.kind === 'cross' && p.start) { p.target = { ...p.start }; }
+      player.speed *= 0.3;
+      shake = 0.5;
+      sfx.horn();
+      score = Math.max(0, score - 50);
+      if (mission && mission.aboard) { mission.hits++; hurt(20); }
+      toast('⚠️ كنت هتخبط واحد بيعدّي! خلّي بالك من المشاة (−٥٠)', 3);
+    }
+  }
+  people.crossCooldown -= dt;
+  if (people.crossCooldown <= 0 && player.speed > 5) {
+    const seg = crossingAhead(map, player.x, player.z, player.heading, 35 + Math.random() * 30);
+    if (seg) { people.spawnCrossing(seg); people.crossCooldown = 7 + Math.random() * 8; }
+    else people.crossCooldown = 1;
   }
 
   // سلوك السواقة مع وجود الحالة
@@ -502,6 +622,9 @@ function drawMinimap() {
 // ---------- اللوب ----------
 const clock = new THREE.Clock();
 let t = 0, frames = 0;
+let pedsOnRoad = [];
+const vehiclesNear = [];
+let crowdCount = 0, crowdTimer = 0;
 function step(dt) {
   t += dt;
 
@@ -509,7 +632,20 @@ function step(dt) {
     updatePlayer(dt);
     updateMission(dt);
   }
-  if (state !== 'paused') traffic.update(dt, player);
+  const isRoad = (x, z) => !solidAt(map, x, z);
+  pedsOnRoad = people.onRoad(isRoad);
+  if (state !== 'paused') {
+    traffic.update(dt, player, pedsOnRoad);
+    vehiclesNear.length = 0;
+    vehiclesNear.push(player);
+    for (const c of traffic.cars) if (Math.abs(c.x - player.x) < 200 && Math.abs(c.z - player.z) < 200) vehiclesNear.push(c);
+    people.update(dt, camera.position.x, camera.position.z, vehiclesNear);
+    for (const c of traffic.honks) {
+      const d = Math.hypot(c.x - player.x, c.z - player.z);
+      if (d < 60) sfx.honk(clamp((c.x - player.x) / 30, -1, 1), 0.12 * (1 - d / 60), 2);
+    }
+    traffic.honks.length = 0;
+  }
   if (state === 'menu') {
     // كاميرا بتلف حوالين المركز في القائمة
     const a = t * 0.08;
@@ -519,17 +655,15 @@ function step(dt) {
 
   // سارينة
   const sl = van.userData.siren;
-  const flash = player.siren && Math.floor(t * 6) % 2 === 0;
-  sl.red.color.setHex(player.siren ? (flash ? 0xff2020 : 0x551111) : 0x551111);
-  sl.blue.color.setHex(player.siren ? (!flash ? 0x2050ff : 0x111155) : 0x111155);
+  const flash = Math.floor(t * 6) % 2 === 0;
+  sl.red.emissiveIntensity = player.siren && flash ? 4 : 0;
+  sl.blue.emissiveIntensity = player.siren && !flash ? 4 : 0;
 
   // علامات
   for (const mk of [pickupMarker, centerMarker]) {
     mk.userData.ring.scale.setScalar(1 + Math.sin(t * 4) * 0.08);
     mk.userData.beam.material.opacity = 0.18 + Math.sin(t * 3) * 0.07;
   }
-  patient.rotation.y = Math.sin(t * 0.7) * 0.4;
-  family.rotation.y = -Math.sin(t * 0.9) * 0.4;
 
   // سهم الاتجاه
   const target = mission ? (mission.aboard ? door : mission.pos) : null;
@@ -549,16 +683,26 @@ function step(dt) {
     toastTimer -= dt;
     if (toastTimer <= 0) $('toast').classList.remove('show');
   }
-  sfx.update(state === 'playing' ? player.speed : 0, player.siren && state === 'playing');
+  crowdTimer -= dt;
+  if (crowdTimer <= 0) {
+    crowdTimer = 0.5;
+    crowdCount = 0;
+    for (const p of people.peds) if (p.active && Math.abs(p.x - player.x) < 25 && Math.abs(p.z - player.z) < 25) crowdCount++;
+  }
+  const playing = state === 'playing';
+  const skid = playing ? clamp(Math.abs(player.steer) * Math.abs(player.speed) / 18 - 0.55, 0, 1) + (keys.down && player.speed > 12 ? 0.6 : 0) : 0;
+  sfx.update(dt, { speed: playing ? player.speed : 0, throttle: playing && keys.up, siren: player.siren && playing, skid, seaDist: Math.max(0, player.z - 4 * TILE), crowd: crowdCount, active: playing });
+  world.follow(player.x, player.z);
   world.update(t, camera.position);
 }
 function frame() {
   requestAnimationFrame(frame);
   frames++;
   step(Math.min(clock.getDelta(), 0.05));
-  renderer.render(scene, camera);
+  if (composer) composer.render();
+  else renderer.render(scene, camera);
 }
 frame();
 
 // للاختبار من الكونسول
-window.__game = { get frames() { return frames; }, get t() { return t; }, player, get state() { return state; }, get mission() { return mission; }, startGame, newMission, step(n, dt = 1 / 30) { for (let i = 0; i < n; i++) step(dt); } };
+window.__game = { people, get frames() { return frames; }, get t() { return t; }, player, get state() { return state; }, get mission() { return mission; }, startGame, newMission, step(n, dt = 1 / 30) { for (let i = 0; i < n; i++) step(dt); } };
