@@ -22,7 +22,37 @@ MIRRORS = [
     'https://overpass.private.coffee/api/interpreter',
     'https://overpass-api.de/api/interpreter',
 ]
-CACHE = os.environ.get('OSM_CACHE', '')  # فولدر لحفظ كل مربع (عشان لو وقف نكمّل من مكانه)
+CACHE = os.environ.get('OSM_CACHE', '')
+FROM_CACHE = os.environ.get('OSM_FROM_CACHE') == '1'  # نعيد التحويل من الكاش من غير نت
+
+# أنواع المباني (عشان شكلها وارتفاعها)
+B_GENERIC, B_RESID, B_HOUSE, B_COMM, B_MOSQUE, B_CHURCH, B_SCHOOL, B_HOSP, B_INDUS, B_SMALL, B_STATION = range(11)
+
+
+def building_type(t):
+    b = t.get('building', 'yes')
+    rel = t.get('religion', '')
+    if b == 'mosque' or (t.get('amenity') == 'place_of_worship' and rel == 'muslim'):
+        return B_MOSQUE
+    if b in ('church', 'cathedral', 'chapel') or (t.get('amenity') == 'place_of_worship' and rel == 'christian'):
+        return B_CHURCH
+    if b in ('school', 'university', 'college', 'kindergarten') or t.get('amenity') in ('school', 'university', 'college'):
+        return B_SCHOOL
+    if b in ('hospital', 'clinic') or t.get('amenity') in ('hospital', 'clinic'):
+        return B_HOSP
+    if b in ('residential', 'apartments'):
+        return B_RESID
+    if b in ('house', 'detached', 'villa', 'semidetached_house', 'terrace'):
+        return B_HOUSE
+    if b in ('commercial', 'retail', 'office', 'hotel', 'supermarket') or t.get('shop') or t.get('amenity') in ('bank', 'restaurant', 'cafe'):
+        return B_COMM
+    if b in ('industrial', 'warehouse', 'service', 'manufacture', 'hangar'):
+        return B_INDUS
+    if b in ('roof', 'garage', 'garages', 'shed', 'kiosk', 'hut', 'carport', 'toilets'):
+        return B_SMALL
+    if b in ('train_station', 'transportation'):
+        return B_STATION
+    return B_GENERIC  # فولدر لحفظ كل مربع (عشان لو وقف نكمّل من مكانه)
 ROAD_TYPES = {
     'motorway': 1, 'trunk': 1, 'primary': 2, 'secondary': 3, 'tertiary': 4,
     'motorway_link': 2, 'trunk_link': 2, 'primary_link': 3, 'secondary_link': 4, 'tertiary_link': 4,
@@ -51,6 +81,8 @@ def fetch_tile(s, w, n, e):
     if cache and os.path.exists(cache):
         with open(cache) as f:
             return json.load(f)
+    if FROM_CACHE:
+        return None
     els = fetch_tile_net(s, w, n, e)
     if cache:
         os.makedirs(CACHE, exist_ok=True)
@@ -87,6 +119,8 @@ def fetch(on_progress=None):
         if True:
             k += 1
             els = fetch_tile(la, lo, min(la + STEP, BBOX[2]), min(lo + STEP, BBOX[3]))
+            if els is None:
+                continue
             new = [el for el in els if el['id'] not in seen]
             seen.update(el['id'] for el in new)
             elements.extend(new)
@@ -112,15 +146,17 @@ def write(osm, status):
     def local(p):
         return round((p['lon'] - lon0) * m_lon * 10), round(-(p['lat'] - lat0) * m_lat * 10)
 
-    def height(tags):
+    def num(v):
         try:
-            if 'height' in tags:
-                return round(float(tags['height'].split()[0].replace(',', '.')) * 10)
-            if 'building:levels' in tags:
-                return round(float(tags['building:levels'].replace(',', '.')) * 32)
+            return float(str(v).split()[0].replace(',', '.'))
         except ValueError:
-            pass
-        return 0  # مش معروف → اللعبة بتقدّر
+            return 0
+
+    def height(tags):
+        return round(num(tags.get('height', 0)) * 10)  # ديسيمتر، 0 = مش معروف
+
+    def levels(tags):
+        return round(num(tags.get('building:levels', 0)))
 
     chunks = {}
 
@@ -129,7 +165,9 @@ def write(osm, status):
         zs = pts[1::2]
         cx = math.floor(sum(xs) / len(xs) / 10 / CHUNK)
         cz = math.floor(sum(zs) / len(zs) / 10 / CHUNK)
-        chunks.setdefault((cx, cz), {'b': [], 'r': [], 'c': [], 'p': []})[kind].append(item)
+        ch = chunks.setdefault((cx, cz), {'b': [], 'bn': {}, 'r': [], 'names': [], 'c': [], 'p': []})
+        ch[kind].append(item)
+        return ch
 
     counts = {'b': 0, 'r': 0, 'c': 0, 'p': 0}
     for el in osm.get('elements', []):
@@ -144,13 +182,22 @@ def write(osm, status):
             if len(geom) < 4:
                 continue
             pts = pts[:-2] if pts[:2] == pts[-2:] else pts  # من غير تكرار أول نقطة
-            put('b', pts, [height(tags)] + pts)
+            ch = put('b', pts, [height(tags), levels(tags), building_type(tags)] + pts)
+            if tags.get('name') or tags.get('name:ar'):
+                ch['bn'][len(ch['b']) - 1] = tags.get('name:ar') or tags.get('name')
             counts['b'] += 1
         elif 'highway' in tags:
             lanes = tags.get('lanes', '')
             lanes = int(lanes) if lanes.isdigit() else 0
             one = 1 if tags.get('oneway') in ('yes', '1', 'true') or tags.get('junction') == 'roundabout' else 0
-            put('r', pts, [ROAD_TYPES[tags['highway']], lanes, one] + pts)
+            name = tags.get('name:ar') or tags.get('name') or ''
+            xs, zs = pts[0::2], pts[1::2]
+            ch = chunks.setdefault((math.floor(sum(xs) / len(xs) / 10 / CHUNK), math.floor(sum(zs) / len(zs) / 10 / CHUNK)),
+                                   {'b': [], 'bn': {}, 'r': [], 'names': [], 'c': [], 'p': []})
+            if name and name not in ch['names']:
+                ch['names'].append(name)
+            ni = ch['names'].index(name) if name else -1
+            ch['r'].append([ROAD_TYPES[tags['highway']], lanes, one, ni] + pts)
             counts['r'] += 1
         elif tags.get('natural') == 'coastline':
             put('c', pts, pts)
@@ -164,13 +211,14 @@ def write(osm, status):
         if f.startswith('c_') and f.endswith('.json'):
             os.remove(os.path.join(OUT, f))
     for (cx, cz), c in chunks.items():
-        with open(os.path.join(OUT, f'c_{cx}_{cz}.json'), 'w') as f:
-            json.dump(c, f, separators=(',', ':'))
+        with open(os.path.join(OUT, f'c_{cx}_{cz}.json'), 'w', encoding='utf-8') as f:
+            json.dump(c, f, separators=(',', ':'), ensure_ascii=False)
     index = {
         'origin': {'lat': lat0, 'lon': lon0},
         'bbox': BBOX,
         'chunk': CHUNK,
         'unit': 0.1,
+        'version': 2,
         'chunks': sorted([[cx, cz] for cx, cz in chunks]),
         'counts': counts,
         'generated': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
@@ -178,7 +226,7 @@ def write(osm, status):
         'attribution': '© OpenStreetMap contributors (ODbL)',
         'roadTypes': ROAD_TYPES,
     }
-    with open(os.path.join(OUT, 'index.json'), 'w') as f:
+    with open(os.path.join(OUT, 'index.json'), 'w', encoding='utf-8') as f:
         json.dump(index, f, ensure_ascii=False, indent=1)
     print(json.dumps(counts), file=sys.stderr)
 

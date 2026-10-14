@@ -735,7 +735,7 @@ const clock = new THREE.Clock();
 let t = 0, frames = 0;
 let pedsOnRoad = [];
 const vehiclesNear = [];
-let crowdCount = 0, crowdTimer = 0, attribTimer = 0;
+let crowdCount = 0, crowdTimer = 0, attribTimer = 0, streetTimer = 0;
 
 // ---------- إسكندرية الحقيقية (OSM) ----------
 let osmSnapped = false, osmPedsVersion = -1, recycleTimer = 0;
@@ -817,7 +817,12 @@ function step(dt) {
   if (state !== 'menu') {
     $('speed').textContent = toArabicDigits(Math.round(Math.abs(player.speed) * 3.6));
     $('score').textContent = toArabicDigits(score);
-    $('district').textContent = '📍 ' + (REAL ? placeName(player.x, player.z) : districtAt(player.x).name);
+    streetTimer -= 1 / 60;
+    if (streetTimer <= 0) {
+      streetTimer = 0.5;
+      const st = osm ? osm.streetName(player.x, player.z) : '';
+      $('district').textContent = '📍 ' + (REAL ? (st || placeName(player.x, player.z)) : districtAt(player.x).name);
+    }
     drawMinimap();
   }
   if (toastTimer > 0) {
