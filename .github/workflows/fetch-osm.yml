@@ -1,0 +1,37 @@
+name: Fetch Alexandria map (OpenStreetMap)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [claude/taxi-game-0qzyhv]
+    paths: [tools/fetch_osm.py, .github/workflows/fetch-osm.yml]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fetch-osm
+  cancel-in-progress: false
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Download and convert OSM data
+        run: python3 tools/fetch_osm.py
+      - name: Show size
+        run: du -sh data/osm && ls data/osm | wc -l && cat data/osm/index.json | head -c 600
+      - name: Commit data
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/osm
+          if git diff --cached --quiet; then echo "no changes"; exit 0; fi
+          git commit -m "Update Alexandria OSM data (© OpenStreetMap contributors, ODbL)"
+          git pull --rebase origin "${GITHUB_REF_NAME}"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
