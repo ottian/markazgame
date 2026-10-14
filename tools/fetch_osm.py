@@ -74,25 +74,37 @@ def fetch_tile_net(s, w, n, e):
     sys.exit(f'all Overpass mirrors failed for tile {s},{w}')
 
 
-def fetch():
+def fetch(on_progress=None):
     seen, elements = set(), []
     lats = [BBOX[0] + i * STEP for i in range(math.ceil((BBOX[2] - BBOX[0]) / STEP))]
     lons = [BBOX[1] + i * STEP for i in range(math.ceil((BBOX[3] - BBOX[1]) / STEP))]
-    total = len(lats) * len(lons)
+    # الأقرب للمركز الأول عشان اللعبة تشتغل حوالين المركز بدري
+    tiles = sorted(((la, lo) for la in lats for lo in lons),
+                   key=lambda t: (t[0] + STEP / 2 - ORIGIN[0]) ** 2 + ((t[1] + STEP / 2 - ORIGIN[1]) * 0.86) ** 2)
+    total = len(tiles)
     k = 0
-    for la in lats:
-        for lo in lons:
+    for la, lo in tiles:
+        if True:
             k += 1
             els = fetch_tile(la, lo, min(la + STEP, BBOX[2]), min(lo + STEP, BBOX[3]))
             new = [el for el in els if el['id'] not in seen]
             seen.update(el['id'] for el in new)
             elements.extend(new)
             print(f'tile {k}/{total}: +{len(new)} (total {len(elements)})', file=sys.stderr)
+            if on_progress and (k <= 4 or k % 4 == 0):
+                on_progress({'elements': elements}, k, total)
             time.sleep(1)
     return {'elements': elements}
 
 
 def main():
+    def progress(osm, k, total):
+        write(osm, f'{k}/{total}')
+
+    write(fetch(progress), 'complete')
+
+
+def write(osm, status):
     lat0, lon0 = ORIGIN
     m_lon = 111320 * math.cos(math.radians(lat0))
     m_lat = 110574
@@ -110,7 +122,6 @@ def main():
             pass
         return 0  # مش معروف → اللعبة بتقدّر
 
-    osm = fetch()
     chunks = {}
 
     def put(kind, pts, item):
@@ -163,6 +174,7 @@ def main():
         'chunks': sorted([[cx, cz] for cx, cz in chunks]),
         'counts': counts,
         'generated': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+        'status': status,
         'attribution': '© OpenStreetMap contributors (ODbL)',
         'roadTypes': ROAD_TYPES,
     }
