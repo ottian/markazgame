@@ -35,7 +35,12 @@ export class RealCity {
     tiles.errorTarget = quality.tileError;
     tiles.setCamera(camera);
     tiles.setResolutionFromRenderer(camera, renderer);
-    scene.add(tiles.group);
+    // غلاف خارجي: بنحرّكه إحنا لظبط الأرض، والمكتبة بتتحكم في tiles.group نفسه
+    this.wrap = new THREE.Group();
+    this.wrap.add(tiles.group);
+    // المكتبة بتحط X ناحية الغرب وZ ناحية الشمال، إحنا عايزين X شرق وZ جنوب
+    this.wrap.rotation.y = Math.PI;
+    scene.add(this.wrap);
     this.tiles = tiles;
     this.loadedOnce = false;
     tiles.addEventListener('load-model', () => { this.loadedOnce = true; });
@@ -50,7 +55,7 @@ export class RealCity {
     this.ray = new THREE.Raycaster();
     this.ray.firstHitOnly = true;
     this.down = new THREE.Vector3(0, -1, 0);
-    this.ground = null; // ارتفاع الأرض المحلي
+    this.ground = 0;
     this.groundTimer = 0;
     this.calibrated = false;
   }
@@ -58,35 +63,45 @@ export class RealCity {
   hit(origin, dir, far) {
     this.ray.set(origin, dir);
     this.ray.far = far;
-    const hits = this.ray.intersectObject(this.tiles.group, true);
+    const hits = this.ray.intersectObject(this.wrap, true);
     return hits.length ? hits[0] : null;
   }
 
-  // أول ما المباني تحمّل: نخلّي الأرض عند y = 0
-  calibrate(x, z) {
-    const h = this.hit(new THREE.Vector3(x, 400, z), this.down, 900);
-    if (!h) return false;
-    this.tiles.group.position.y -= h.point.y;
-    this.tiles.group.updateMatrixWorld(true);
-    this.ground = 0;
-    this.calibrated = true;
-    return true;
+  // أقل ارتفاع تحت العربية (٥ أشعة) = الأسفلت، مش شجرة ولا عربية راكنة
+  sampleGround(x, z) {
+    let min = Infinity;
+    for (const [dx, dz] of [[0, 0], [2.5, 0], [-2.5, 0], [0, 2.5], [0, -2.5]]) {
+      const h = this.hit(new THREE.Vector3(x + dx, 3000, z + dz), this.down, 6000);
+      if (h) min = Math.min(min, h.point.y);
+    }
+    return min;
   }
 
-  // ارتفاع الأرض تحت العربية (بنتجاهل القفزات لفوق: شجر/عربيات راكنة)
-  groundAt(x, z, dt) {
-    if (!this.calibrated) return 0;
+  // بنحرّك المدينة لفوق/لتحت عشان الأرض تحت العربية تفضل عند y = 0
+  // (إسكندرية مسطّحة، فده كفاية ومن غير ما نغيّر فيزيا العربية)
+  adjustGround(x, z, dt) {
     this.groundTimer -= dt;
-    if (this.groundTimer <= 0) {
-      this.groundTimer = 0.12;
-      const h = this.hit(new THREE.Vector3(x, this.ground + 30, z), this.down, 60);
-      if (h) {
-        const y = h.point.y;
-        if (y < this.ground + 1.2) this.target = y;
-      }
+    if (this.groundTimer > 0) return;
+    this.groundTimer = 0.25;
+    this.wrap.updateMatrixWorld(true);
+    const y = this.sampleGround(x, z);
+    if (!Number.isFinite(y)) return;
+    if (!this.calibrated) {
+      this.wrap.position.y -= y;
+      this.calibrated = true;
+      this.jumps = 0;
+    } else if (Math.abs(y) < 1.5) {
+      this.wrap.position.y -= y * 0.5;
+      this.jumps = 0;
+    } else if (++this.jumps >= 3) {
+      // البلاطات اتغيّرت لدقّة أعلى/أقل → نتظبط على طول
+      this.wrap.position.y -= y;
+      this.jumps = 0;
     }
-    if (this.target !== undefined) this.ground += (this.target - this.ground) * Math.min(1, dt * 6);
-    return this.ground;
+  }
+
+  groundAt() {
+    return 0;
   }
 
   // تصادم مع المباني الحقيقية: أشعة أفقية من قدّام/ورا العربية
@@ -130,7 +145,7 @@ export class RealCity {
   update(x, z) {
     this.camera.updateMatrixWorld();
     this.tiles.update();
-    if (!this.calibrated && this.loadedOnce) this.calibrate(x, z);
+    if (this.loadedOnce) this.adjustGround(x, z, 1 / 60);
   }
 
   drawMinimap(g, S, player, target) {
