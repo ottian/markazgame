@@ -3,6 +3,7 @@ import { makeFacadeSet } from './facades.js';
 import { makeRandomTraffic } from './vehicles.js';
 import { latLonToLocal } from './realcity.js';
 import { CONFIG } from './config.js';
+import { makeAsphalt, makePavers, pbrSet, worldUV } from './textures.js';
 import { sedanInstanceParts } from './carmodels.js';
 
 // إسكندرية الحقيقية من OpenStreetMap: مباني بأشكالها الحقيقية + شوارع + مرور + أرصفة
@@ -46,10 +47,20 @@ export class OsmCity {
     this.chunks = new Map(); // key -> {state, data, group, polys, grid}
     this.queue = [];
     this.group = new THREE.Group();
-    this.facades = makeFacadeSet();
+    this.facades = makeFacadeSet(OsmCity.pbr);
     this.roofMat = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide });
-    this.roadMat = new THREE.MeshLambertMaterial({ color: 0x3a3c42, side: THREE.DoubleSide });
-    this.walkMat = new THREE.MeshLambertMaterial({ color: 0xb9b3a8, side: THREE.DoubleSide });
+    if (OsmCity.pbr) {
+      // أسفلت حقيقي (حصى وشروخ وترقيع) ورصيف ببلاط — ماشيين على إحداثيات العالم
+      const a = pbrSet(makeAsphalt(512, 7), 2.5), w = pbrSet(makePavers(512, 21), 3);
+      this.roadMat = worldUV(new THREE.MeshStandardMaterial({ ...a, roughness: 1, metalness: 0, side: THREE.DoubleSide }), 1 / 7);
+      this.walkMat = worldUV(new THREE.MeshStandardMaterial({ ...w, roughness: 1, metalness: 0, side: THREE.DoubleSide }), 1 / 2);
+      this.roadMat.normalScale.set(0.8, 0.8);
+      this.roadMat.envMapIntensity = 0.25;
+      this.walkMat.envMapIntensity = 0.2;
+    } else {
+      this.roadMat = new THREE.MeshLambertMaterial({ color: 0x3a3c42, side: THREE.DoubleSide });
+      this.walkMat = new THREE.MeshLambertMaterial({ color: 0xb9b3a8, side: THREE.DoubleSide });
+    }
     this.parkMat = new THREE.MeshLambertMaterial({ color: 0x4a7a3a, side: THREE.DoubleSide });
     this.lineMat = new THREE.MeshBasicMaterial({ color: 0xeeeeea, side: THREE.DoubleSide });
     this.yellowMat = new THREE.MeshBasicMaterial({ color: 0xf2c230, side: THREE.DoubleSide });
@@ -230,6 +241,17 @@ export class OsmCity {
   }
 
   key(cx, cz) { return `${cx}_${cz}`; }
+
+  // الشوارع بتلمع وتغمق وهي مبلولة
+  setWet(v) {
+    if (!this.roadMat.isMeshStandardMaterial) return;
+    this.roadMat.roughness = 1 - v * 0.75;
+    this.roadMat.color.setScalar(1 - v * 0.35);
+    this.roadMat.envMapIntensity = 0.3 + v * 1.8;
+    this.walkMat.roughness = 1 - v * 0.5;
+    this.walkMat.envMapIntensity = 0.2 + v * 0.8;
+    this.walkMat.color.setScalar(1 - v * 0.25);
+  }
 
   // ---------- تحميل القطع حوالين اللاعب ----------
   update(px, pz, radius) {

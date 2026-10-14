@@ -8,8 +8,8 @@ const K = [
   { h: 0, top: [0.01, 0.015, 0.05], mid: [0.02, 0.035, 0.09], hor: [0.06, 0.08, 0.15], sun: [0.5, 0.6, 0.9], sunI: 0.25, hemi: 0.3, night: 1 },
   { h: 5, top: [0.02, 0.03, 0.08], mid: [0.05, 0.06, 0.14], hor: [0.12, 0.12, 0.2], sun: [0.5, 0.6, 0.9], sunI: 0.25, hemi: 0.35, night: 1 },
   { h: 6.3, top: [0.12, 0.2, 0.42], mid: [0.5, 0.4, 0.55], hor: [1.0, 0.62, 0.42], sun: [1.0, 0.65, 0.4], sunI: 1.2, hemi: 0.75, night: 0.35 },
-  { h: 8, top: [0.18, 0.38, 0.74], mid: [0.42, 0.62, 0.88], hor: [0.78, 0.85, 0.92], sun: [1.0, 0.93, 0.82], sunI: 1.7, hemi: 0.85, night: 0 },
-  { h: 15.5, top: [0.18, 0.38, 0.74], mid: [0.42, 0.62, 0.88], hor: [0.8, 0.86, 0.92], sun: [1.0, 0.92, 0.8], sunI: 1.7, hemi: 0.85, night: 0 },
+  { h: 8, top: [0.18, 0.38, 0.74], mid: [0.42, 0.62, 0.88], hor: [0.78, 0.85, 0.92], sun: [1.0, 0.93, 0.82], sunI: 1.7, hemi: 1.05, night: 0 },
+  { h: 15.5, top: [0.18, 0.38, 0.74], mid: [0.42, 0.62, 0.88], hor: [0.8, 0.86, 0.92], sun: [1.0, 0.92, 0.8], sunI: 1.7, hemi: 1.05, night: 0 },
   { h: 17.3, top: [0.08, 0.12, 0.3], mid: [0.38, 0.24, 0.46], hor: [1.0, 0.55, 0.25], sun: [1.0, 0.6, 0.32], sunI: 2.0, hemi: 1.0, night: 0.25 },
   { h: 18.4, top: [0.04, 0.05, 0.16], mid: [0.2, 0.12, 0.3], hor: [0.6, 0.28, 0.24], sun: [0.9, 0.45, 0.3], sunI: 0.7, hemi: 0.6, night: 0.75 },
   { h: 19.5, top: [0.01, 0.02, 0.06], mid: [0.03, 0.04, 0.1], hor: [0.08, 0.09, 0.16], sun: [0.5, 0.6, 0.9], sunI: 0.25, hemi: 0.32, night: 1 },
@@ -56,7 +56,9 @@ export class DayNight {
     W.sun.color.setRGB(...s.sun);
     W.sun.intensity = s.sunI * dim;
     W.hemi.intensity = s.hemi * (1 - R * 0.25);
-    W.hemi.color.setRGB(lerp(1, 0.55, s.night), lerp(0.88, 0.62, s.night), lerp(0.75, 0.95, s.night));
+    W.hemi.color.setRGB(lerp(1, 0.55, s.night), lerp(0.92, 0.62, s.night), lerp(0.82, 0.95, s.night));
+    // ارتداد النور من الأرض والحيطان (دافي بالنهار)
+    W.hemi.groundColor.setRGB(lerp(0.62, 0.08, s.night), lerp(0.55, 0.08, s.night), lerp(0.45, 0.12, s.night));
     const u = W.sky.material.uniforms;
     u.uTop.value.set(...s.top);
     u.uMid.value.set(...s.mid);

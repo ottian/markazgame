@@ -25,9 +25,9 @@ const store = {
 
 // ---------- الجودة ----------
 const QUALITY = {
-  low: { label: 'منخفضة', pr: 1, shadows: 0, bloom: false, peds: 110, traffic: 50 },
-  medium: { label: 'متوسطة', pr: 1.25, shadows: 1024, bloom: true, peds: 200, traffic: 70 },
-  high: { label: 'عالية', pr: 2, shadows: 2048, bloom: true, peds: 300, traffic: 90 },
+  low: { label: 'منخفضة', pr: 1, shadows: 0, bloom: false, ao: 0, pbr: false, peds: 110, traffic: 50 },
+  medium: { label: 'متوسطة', pr: 1.25, shadows: 2048, bloom: true, ao: 1, pbr: true, peds: 200, traffic: 70 },
+  high: { label: 'عالية', pr: 2, shadows: 4096, bloom: true, ao: 2, pbr: true, peds: 300, traffic: 90 },
 };
 const isTouch = matchMedia('(pointer: coarse)').matches;
 let qKey = store.get('markaz_quality');
@@ -50,7 +50,7 @@ renderer.shadowMap.enabled = !!Q.shadows;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.05;
+renderer.toneMappingExposure = Q.pbr ? 1.2 : 1.05;
 
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(62, 1, 0.5, 2500);
@@ -60,12 +60,12 @@ const camera = new THREE.PerspectiveCamera(62, 1, 0.5, 2500);
   scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
   scene.environmentIntensity = 0.25;
 }
-let composer = null;
+let composer = null, post = null;
 if (Q.bloom) {
-  composer = new EffectComposer(renderer);
-  composer.addPass(new RenderPass(scene, camera));
-  composer.addPass(new UnrealBloomPass(new THREE.Vector2(256, 256), 0.45, 0.4, 0.95));
-  composer.addPass(new OutputPass());
+  renderer.setSize(window.innerWidth, window.innerHeight, false);
+  const { makeComposer } = await import('./postfx.js');
+  post = await makeComposer(renderer, scene, camera, Q);
+  composer = post.composer;
 }
 
 function resize() {
@@ -92,6 +92,7 @@ if (REAL) {
   if (useGoogle) city = new R.RealCity(scene, camera, renderer, Q);
   if (hasOsm) {
     const O = await import('./osmcity.js');
+    O.OsmCity.pbr = Q.pbr;
     osm = await O.OsmCity.load(CONFIG.real.center);
     if (osm) scene.add(osm.group);
     window.__OsmTraffic = O.OsmTraffic;
@@ -136,7 +137,20 @@ let savedHour = Number(store.get('markaz_hour'));
 const daynight = new DayNight(world, scene, Number.isFinite(savedHour) && savedHour > 0 ? savedHour : 16.5);
 const weatherMode = store.get('markaz_weather') || 'auto';
 const weather = new Weather(scene, weatherMode);
-daynight.listeners.push((n) => { setNightLights(n); scene.environmentIntensity = 0.28 - n * 0.2; });
+daynight.listeners.push((n) => { setNightLights(n); scene.environmentIntensity = 0.55 - n * 0.4; });
+// انعكاسات من السما الحقيقية (بتتحدّث مع الوقت)
+const skyPmrem = new THREE.PMREMGenerator(renderer);
+const skyScene = new THREE.Scene();
+skyScene.add(new THREE.Mesh(world.sky.geometry, world.sky.material));
+let envHour = -99, envTex = null;
+function updateSkyEnv() {
+  if (Math.abs(daynight.hour - envHour) < 0.25 && envTex) return;
+  envHour = daynight.hour;
+  const rt = skyPmrem.fromScene(skyScene, 0, 1, 3000);
+  if (envTex) envTex.dispose();
+  envTex = rt;
+  scene.environment = rt.texture;
+}
 function registerNightMats() {
   if (!osm) return;
   for (const [k, m] of Object.entries(osm.facades)) daynight.addNight(m, k === 'shops' ? 0.25 : 0.04, k === 'shops' ? 1.1 : 0.95);
@@ -951,6 +965,9 @@ function step(dt) {
   }
   daynight.rain = weather.value;
   daynight.update(state === 'paused' ? 0 : dt);
+  updateSkyEnv();
+  if (post) post.grading(daynight.night, weather.value, t);
+  if (osm) osm.setWet(weather.value);
   weather.update(dt, camera.position, () => sfx.thunder());
   if (weather.flash > 0) world.hemi.intensity += weather.flash * 4;
   sfx.setRain(weather.value);

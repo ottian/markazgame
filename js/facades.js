@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { normalFromImage } from './textures.js';
 
 // واجهات مرسومة بالكود بستايل إسكندراني — كل صورة = ٤ شبابيك × ٤ أدوار وبتتكرر على الحيطة
 // (map للألوان + emissive للشبابيك المنوّرة بالليل)
@@ -224,7 +225,7 @@ function centerFacade(g, S, rand, lit, night) {
   }
 }
 
-export function makeFacadeSet() {
+export function makeFacadeSet(pbr = false) {
   const set = {
     residential: pair(256, 11, residential),
     modern: pair(256, 22, modern),
@@ -236,10 +237,20 @@ export function makeFacadeSet() {
   };
   const mats = {};
   for (const [k, t] of Object.entries(set)) {
-    mats[k] = new THREE.MeshLambertMaterial({
-      map: t.map, emissiveMap: t.emissive, emissive: 0xffffff, emissiveIntensity: k === 'shops' ? 1.0 : 0.8,
-      vertexColors: true, side: THREE.DoubleSide,
-    });
+    if (pbr) {
+      // نورمال من الصورة: الشبابيك غاطسة والإطارات والكرانيش بارزة
+      const nm = normalFromImage(t.map.image, 512, 1.0);
+      mats[k] = new THREE.MeshStandardMaterial({
+        map: t.map, normalMap: nm, emissiveMap: t.emissive, emissive: 0xffffff, emissiveIntensity: k === 'shops' ? 1.0 : 0.8,
+        roughness: 0.9, metalness: 0, vertexColors: true, side: THREE.DoubleSide, envMapIntensity: 0.3,
+      });
+      mats[k].normalScale.set(0.6, 0.6);
+    } else {
+      mats[k] = new THREE.MeshLambertMaterial({
+        map: t.map, emissiveMap: t.emissive, emissive: 0xffffff, emissiveIntensity: k === 'shops' ? 1.0 : 0.8,
+        vertexColors: true, side: THREE.DoubleSide,
+      });
+    }
   }
   return mats;
 }
