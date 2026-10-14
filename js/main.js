@@ -3,6 +3,7 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { TILE, COLS, ROWS, T, CENTER, DISTRICTS, buildMap, solidAt, tileAt, districtAt, tileCenter, randomPickup, sidewalkPaths, cornicheStanders, crossingAhead } from './map.js';
 import { buildWorld, makeMarker } from './world.js';
 import { People } from './people.js';
@@ -53,11 +54,17 @@ renderer.toneMappingExposure = 1.05;
 
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(62, 1, 0.5, 2500);
+// إضاءة بيئة (انعكاسات على دهان العربيات والزجاج)
+{
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+  scene.environmentIntensity = 0.25;
+}
 let composer = null;
 if (Q.bloom) {
   composer = new EffectComposer(renderer);
   composer.addPass(new RenderPass(scene, camera));
-  composer.addPass(new UnrealBloomPass(new THREE.Vector2(256, 256), 0.55, 0.45, 0.85));
+  composer.addPass(new UnrealBloomPass(new THREE.Vector2(256, 256), 0.45, 0.4, 0.95));
   composer.addPass(new OutputPass());
 }
 
@@ -129,7 +136,7 @@ let savedHour = Number(store.get('markaz_hour'));
 const daynight = new DayNight(world, scene, Number.isFinite(savedHour) && savedHour > 0 ? savedHour : 16.5);
 const weatherMode = store.get('markaz_weather') || 'auto';
 const weather = new Weather(scene, weatherMode);
-daynight.listeners.push((n) => setNightLights(n));
+daynight.listeners.push((n) => { setNightLights(n); scene.environmentIntensity = 0.28 - n * 0.2; });
 function registerNightMats() {
   if (!osm) return;
   for (const [k, m] of Object.entries(osm.facades)) daynight.addNight(m, k === 'shops' ? 0.25 : 0.04, k === 'shops' ? 1.1 : 0.95);

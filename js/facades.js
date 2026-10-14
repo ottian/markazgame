@@ -16,8 +16,9 @@ function pair(size, seed, draw) {
   const lit = Array.from({ length: 16 }, () => rand() < 0.3);
   const mk = (night) => {
     const cv = document.createElement('canvas');
-    cv.width = cv.height = size;
+    cv.width = cv.height = size * 2; // دقة أعلى
     const g = cv.getContext('2d');
+    g.scale(2, 2);
     draw(g, size, rand, lit, night);
     const t = new THREE.CanvasTexture(cv);
     t.colorSpace = THREE.SRGBColorSpace;
@@ -35,40 +36,62 @@ const C = 64; // حجم الخانة (شباك واحد × دور واحد)
 
 // عمارة سكنية: شيش خشب، بلكونات بسور، تكييفات
 function residential(g, S, rand, lit, night) {
-  g.fillStyle = night ? '#000' : '#ece4d4';
-  g.fillRect(0, 0, S, S);
+  if (night) {
+    g.fillStyle = '#000';
+    g.fillRect(0, 0, S, S);
+  } else {
+    g.fillStyle = '#ece4d4';
+    g.fillRect(0, 0, S, S);
+    // ملمس المحارة: نقط فاتحة وغامقة
+    for (let i = 0; i < 1400; i++) {
+      g.fillStyle = rand() < 0.5 ? 'rgba(0,0,0,0.035)' : 'rgba(255,255,255,0.05)';
+      g.fillRect(rand() * S, rand() * S, 1 + rand() * 2, 1 + rand() * 2);
+    }
+  }
   for (let y = 0; y < 4; y++) {
     for (let x = 0; x < 4; x++) {
       const px = x * C, py = y * C, on = lit[y * 4 + x];
-      if (!night) {
-        g.fillStyle = 'rgba(0,0,0,0.06)';
-        g.fillRect(px, py + C - 6, C, 6); // فاصل الدور
-      }
       const balcony = (x + y) % 2 === 0;
-      // الشباك / باب البلكونة
       const wy = balcony ? py + 8 : py + 14, wh = balcony ? 44 : 30;
       if (night) {
-        if (on) { g.fillStyle = '#ffb347'; g.fillRect(px + 18, wy, 28, wh); }
+        if (on) { g.fillStyle = (x + y) % 3 ? '#ffb347' : '#e8f0ff'; g.fillRect(px + 19, wy + 1, 26, wh - 2); }
         continue;
       }
-      g.fillStyle = on ? '#f6d48a' : '#2a3140';
-      g.fillRect(px + 18, wy, 28, wh);
-      // شيش مفتوح على الجنبين
-      const shutter = ['#3d6b4a', '#6b4a2e', '#5a6f7a'][(x * 7 + y * 3) % 3];
-      g.fillStyle = shutter;
-      g.fillRect(px + 10, wy, 7, wh);
-      g.fillRect(px + 47, wy, 7, wh);
-      if (balcony) {
-        g.fillStyle = '#d8cfbd';
-        g.fillRect(px + 6, py + 48, 52, 4); // أرضية البلكونة
-        g.fillStyle = '#4a4a4a';
-        for (let i = 0; i < 8; i++) g.fillRect(px + 8 + i * 6.5, py + 40, 1.5, 9); // السور
-        g.fillRect(px + 6, py + 39, 52, 2);
-      } else if ((x + y * 2) % 3 === 0) {
-        g.fillStyle = '#d9d9d9';
-        g.fillRect(px + 22, py + 46, 20, 10); // تكييف
-        g.fillStyle = '#9a9a9a';
-        g.fillRect(px + 24, py + 48, 16, 2);
+      // كرنيشة الدور + خط تراب نازل من تحت الشباك
+      g.fillStyle = 'rgba(0,0,0,0.07)';
+      g.fillRect(px, py + C - 5, C, 5);
+      const grd = g.createLinearGradient(0, wy + wh, 0, wy + wh + 18);
+      grd.addColorStop(0, 'rgba(60,50,40,0.18)');
+      grd.addColorStop(1, 'rgba(60,50,40,0)');
+      g.fillStyle = grd;
+      g.fillRect(px + 20, wy + wh, 24, 18);
+      // إطار أبيض
+      g.fillStyle = '#f7f3ea';
+      g.fillRect(px + 16, wy - 3, 32, wh + 5);
+      // الزجاج (مع انعكاس سما)
+      const gl = g.createLinearGradient(0, wy, 0, wy + wh);
+      gl.addColorStop(0, on ? '#f6d48a' : '#56708a');
+      gl.addColorStop(1, on ? '#e0b060' : '#222a36');
+      g.fillStyle = gl;
+      g.fillRect(px + 19, wy, 26, wh);
+      g.fillStyle = '#f7f3ea';
+      g.fillRect(px + 31, wy, 2, wh); // قايم في النص
+      // شيش خشب مفتوح بشرايح
+      const shutter = ['#3d6b4a', '#6b4a2e', '#5a6f7a', '#7a5a3a'][(x * 7 + y * 3) % 4];
+      for (const sx of [px + 9, px + 48]) {
+        g.fillStyle = shutter;
+        g.fillRect(sx, wy - 2, 7, wh + 3);
+        g.fillStyle = 'rgba(0,0,0,0.25)';
+        for (let k = wy; k < wy + wh; k += 3) g.fillRect(sx, k, 7, 1);
+      }
+      // عتبة
+      g.fillStyle = '#d6cbb5';
+      g.fillRect(px + 14, wy + wh + 1, 36, 3);
+      if (!balcony && (x + y * 2) % 3 === 0) {
+        g.fillStyle = '#dcdcdc';
+        g.fillRect(px + 21, py + 47, 22, 11); // تكييف
+        g.fillStyle = '#8a8a8a';
+        for (let k = 0; k < 4; k++) g.fillRect(px + 23, py + 49 + k * 2, 18, 1);
       }
     }
   }

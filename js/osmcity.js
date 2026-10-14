@@ -3,6 +3,7 @@ import { makeFacadeSet } from './facades.js';
 import { makeRandomTraffic } from './vehicles.js';
 import { latLonToLocal } from './realcity.js';
 import { CONFIG } from './config.js';
+import { sedanInstanceParts } from './carmodels.js';
 
 // إسكندرية الحقيقية من OpenStreetMap: مباني بأشكالها الحقيقية + شوارع + مرور + أرصفة
 // البيانات في data/osm (بتتولّد بـ tools/fetch_osm.py) — © OpenStreetMap contributors (ODbL)
@@ -127,6 +128,44 @@ export class OsmCity {
     }
     this.centerInfo = null;
     {
+      // بلكونة: سقف خرسانة بارز + سور حديد بفراغات
+      const cv = document.createElement('canvas');
+      cv.width = 64; cv.height = 32;
+      const g2 = cv.getContext('2d');
+      g2.clearRect(0, 0, 64, 32);
+      g2.fillStyle = '#2f3134';
+      g2.fillRect(0, 0, 64, 4);
+      g2.fillRect(0, 28, 64, 4);
+      for (let x = 2; x < 64; x += 6) g2.fillRect(x, 0, 2, 32);
+      const railTex = new THREE.CanvasTexture(cv);
+      railTex.wrapS = THREE.RepeatWrapping;
+      railTex.repeat.set(2, 1);
+      railTex.colorSpace = THREE.SRGBColorSpace;
+      const rail = new THREE.PlaneGeometry(2.0, 0.95).translate(0, 0.62, 0.45);
+      const sides = [];
+      const merge = (geos) => {
+        const pos = [], nrm = [], uv = [];
+        for (const g0 of geos) { const g1 = g0.toNonIndexed(); pos.push(...g1.attributes.position.array); nrm.push(...g1.attributes.normal.array); uv.push(...g1.attributes.uv.array); }
+        const out = new THREE.BufferGeometry();
+        out.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+        out.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3));
+        out.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+        return out;
+      };
+      // البلكونة متجهة لبره على +x
+      const rot = (geo) => geo.rotateY(Math.PI / 2);
+      this.balc = {
+        slab: rot(new THREE.BoxGeometry(2.1, 0.14, 0.95).translate(0, 0.07, 0)),
+        rail: rot(merge([rail, ...sides])),
+        slabMat: new THREE.MeshLambertMaterial({ color: 0xd9d0bf }),
+        railMat: new THREE.MeshLambertMaterial({ map: railTex, transparent: true, alphaTest: 0.5, side: THREE.DoubleSide }),
+        room: new THREE.BoxGeometry(3.2, 2.6, 3.0).translate(0, 1.3, 0),
+        roomMat: new THREE.MeshLambertMaterial({ color: 0xcfc6b4 }),
+        dish: new THREE.SphereGeometry(0.45, 12, 6, 0, Math.PI * 2, 0, Math.PI / 3).rotateX(Math.PI),
+        dishMat: new THREE.MeshLambertMaterial({ color: 0xe8e8e8, side: THREE.DoubleSide }),
+      };
+    }
+    {
       // أشكال العربيات الراكنة والقهاوي (متشاركة)
       const box = (w, h, dd, x, y, z) => new THREE.BoxGeometry(w, h, dd).translate(x, y, z);
       const wheelsGeo = [];
@@ -150,7 +189,8 @@ export class OsmCity {
         carCabin: box(2.1, 0.5, 1.62, -0.25, 1.17, 0),
         carRoof: box(2.0, 0.06, 1.56, -0.25, 1.45, 0),
         carWheels: merge(wheelsGeo),
-        paint: new THREE.MeshStandardMaterial({ roughness: 0.35, metalness: 0.5 }),
+        paint: new THREE.MeshPhysicalMaterial({ roughness: 0.4, metalness: 0.4, clearcoat: 0.5, clearcoatRoughness: 0.15 }),
+        sedan: sedanInstanceParts(),
         glass: new THREE.MeshStandardMaterial({ color: 0x18222e, roughness: 0.1, metalness: 0.8 }),
         tire: new THREE.MeshLambertMaterial({ color: 0x141414 }),
         table: merge([box(0.8, 0.04, 0.8, 0, 0.75, 0), box(0.06, 0.75, 0.06, 0, 0.37, 0)]),
@@ -207,6 +247,14 @@ export class OsmCity {
             .catch(() => { c.state = 'failed'; });
         }
       }
+    // التفاصيل الصغيرة بتظهر في القطع القريبة بس
+    const near = radius >= 2 ? 520 : 380;
+    for (const [k3, c3] of this.chunks) {
+      if (c3.state !== 'built') continue;
+      const [x3, z3] = k3.split('_').map(Number);
+      const mx = (x3 + 0.5) * this.CH + this.shift.x, mz = (z3 + 0.5) * this.CH + this.shift.z;
+      c3.detail.visible = Math.hypot(mx - px, mz - pz) < near;
+    }
     // نبني قطعة واحدة كل فريم عشان منقطّعش
     const k = this.queue.shift();
     if (k && this.chunks.get(k)?.state === 'parsed') this.build(k);
@@ -242,6 +290,10 @@ export class OsmCity {
     const c = this.chunks.get(k);
     const d = c.data;
     const g = new THREE.Group();
+    const detail = new THREE.Group(); // تفاصيل صغيرة بتظهر قريب بس
+    g.add(detail);
+    c.detail = detail;
+    c.cx = 0; c.cz = 0;
     c.polys = [];
     c.roadsLocal = [];
     // ---------- تكميل المباني الناقصة ----------
@@ -336,7 +388,7 @@ export class OsmCity {
     const buf = {};
     const B = (m) => (buf[m] ||= { p: [], n: [], u: [], c: [] });
     const roof = [], roofCol = [];
-    const domes = [], minarets = [], tanks = [];
+    const domes = [], minarets = [], tanks = [], balconies = [], roofRooms = [], dishes = [];
     const col = new THREE.Color();
     const WALLS = [0xece2cf, 0xf2e6c8, 0xe6d3b3, 0xddd5c8, 0xefdccb, 0xe9e4d6, 0xd9cdb6, 0xf3ecdd, 0xe8d9bc, 0xcfc6b5];
     const v1 = d.b.length && d.b[0].length >= 3 && this.index.version >= 2;
@@ -409,6 +461,7 @@ export class OsmCity {
       if (isCenter) wallHex = 0xffffff;
       col.setHex(wallHex);
       // تعتيق بسيط: الأدوار اللي تحت أغمق شوية
+      const grime = hash(Math.round(cx * 11) ^ Math.round(cz * 5) ^ 4242);
       const shopsBand = !isCenter && (facade === 'residential' || facade === 'modern') && area > 50 && floors >= 3 && seed2 > 0.25 ? 4.2 : 0;
 
       for (let i = 0; i < n; i++) {
@@ -421,7 +474,10 @@ export class OsmCity {
           const o = B(mat);
           o.p.push(ax, y0, az, bx, y0, bz, bx, y1, bz, ax, y0, az, bx, y1, bz, ax, y1, az);
           o.u.push(0, v0, u1, v0, u1, v1x, 0, v0, u1, v1x, 0, v1x);
-          for (let q = 0; q < 6; q++) { o.n.push(nx, 0, nz); o.c.push(tint.r, tint.g, tint.b); }
+          // تعتيق: تحت أغمق (تراب وعوادم)، وفوق أفتح شوية من الشمس
+          const g0 = mat === 'shops' ? 1 : 0.78 + grime * 0.1, g1 = mat === 'shops' ? 1 : Math.min(1.06, 0.96 + (y1 / 40) * 0.1);
+          const ys = [y0, y0, y1, y0, y1, y1];
+          for (let q = 0; q < 6; q++) { const f = ys[q] === y0 ? g0 : g1; o.n.push(nx, 0, nz); o.c.push(tint.r * f, tint.g * f, tint.b * f); }
         };
         const top = h;
         if (shopsBand) {
@@ -432,6 +488,22 @@ export class OsmCity {
         }
         // سور السطح
         if (type !== T_SMALL && type !== T_HOUSE) quad(facade, top, top + 0.9, len / 13.6, 0.97, 1, col);
+        // بلكونات حقيقية بارزة (سقف خرسانة + سور حديد) على الحيطان الطويلة
+        if ((facade === 'residential' || facade === 'classic') && floors >= 3 && len > 5 && balconies.length < 2500 * 5) {
+          const mx = (ax + bx) / 2, mz = (az + bz) / 2;
+          const out = nx * (mx - cx) + nz * (mz - cz) >= 0 ? 1 : -1;
+          const ox = nx * out, oz = nz * out;
+          const fh = h / floors;
+          const f0 = shopsBand ? 2 : 1;
+          for (let k = 0; (k + 0.5) * 3.4 < len - 0.8; k++) {
+            const s0 = (k + 0.5) * 3.4 / len;
+            const px = ax + (bx - ax) * s0, pz = az + (bz - az) * s0;
+            for (let f = f0; f < floors; f++) {
+              if ((k + f + Math.floor(seed2 * 3)) % 2) continue;
+              balconies.push(px + ox * 0.5, f * fh, pz + oz * 0.5, Math.atan2(oz, ox), seed2);
+            }
+          }
+        }
       }
       // السطح
       const contour = [];
@@ -453,6 +525,9 @@ export class OsmCity {
       } else if ((facade === 'residential' || facade === 'classic') && floors >= 4 && area > 60) {
         const count = 1 + Math.floor(seed2 * 3);
         for (let q = 0; q < count; q++) tanks.push(cx + (seed - 0.5) * minDim * 0.4 + q * 1.8, h, cz + (seed2 - 0.5) * minDim * 0.4);
+        // أوضة السلم على السطح + دش
+        if (minDim > 7) roofRooms.push(cx - (seed - 0.5) * minDim * 0.3, h, cz - (seed2 - 0.5) * minDim * 0.3, seed * 6);
+        if (seed2 > 0.35) dishes.push(cx + (seed2 - 0.5) * minDim * 0.5, h, cz + (seed - 0.5) * minDim * 0.5, seed * 6);
       }
       if (isCenter) centerPoly = { p, cx, cz, h };
       c.polys.push({ p, minx, minz, maxx, maxz });
@@ -504,6 +579,47 @@ export class OsmCity {
       }
       shaft.castShadow = cap.castShadow = true;
       g.add(shaft, cap);
+    }
+    if (balconies.length) {
+      const n5 = balconies.length / 5;
+      const slab = new THREE.InstancedMesh(this.balc.slab, this.balc.slabMat, n5);
+      const rail = new THREE.InstancedMesh(this.balc.rail, this.balc.railMat, n5);
+      const dd = new THREE.Object3D();
+      for (let i = 0; i < n5; i++) {
+        dd.position.set(balconies[i * 5], balconies[i * 5 + 1], balconies[i * 5 + 2]);
+        dd.rotation.set(0, -balconies[i * 5 + 3], 0);
+        dd.updateMatrix();
+        slab.setMatrixAt(i, dd.matrix);
+        rail.setMatrixAt(i, dd.matrix);
+      }
+      slab.castShadow = rail.castShadow = true;
+      slab.receiveShadow = true;
+      detail.add(slab, rail);
+    }
+    if (roofRooms.length) {
+      const n4 = roofRooms.length / 4;
+      const rm = new THREE.InstancedMesh(this.balc.room, this.balc.roomMat, n4);
+      const dd = new THREE.Object3D();
+      for (let i = 0; i < n4; i++) {
+        dd.position.set(roofRooms[i * 4], roofRooms[i * 4 + 1], roofRooms[i * 4 + 2]);
+        dd.rotation.set(0, roofRooms[i * 4 + 3], 0);
+        dd.updateMatrix();
+        rm.setMatrixAt(i, dd.matrix);
+      }
+      rm.castShadow = true;
+      g.add(rm);
+    }
+    if (dishes.length) {
+      const n4 = dishes.length / 4;
+      const dm2 = new THREE.InstancedMesh(this.balc.dish, this.balc.dishMat, n4);
+      const dd = new THREE.Object3D();
+      for (let i = 0; i < n4; i++) {
+        dd.position.set(dishes[i * 4], dishes[i * 4 + 1] + 0.9, dishes[i * 4 + 2]);
+        dd.rotation.set(-0.7, dishes[i * 4 + 3], 0);
+        dd.updateMatrix();
+        dm2.setMatrixAt(i, dd.matrix);
+      }
+      g.add(dm2);
     }
     if (tanks.length) {
       const tm = new THREE.InstancedMesh(this.tankGeo, this.tankMat, tanks.length / 3);
@@ -764,8 +880,8 @@ export class OsmCity {
     flat(yellow, this.yellowMat);
     vert(curbs, this.curbMat);
     vert(plainCurbs, this.plainCurbMat);
-    this.furniture(g, lamps, lights, signsOne, signsNo);
-    this.life(g, parked, cafes);
+    this.furniture(detail, lamps, lights, signsOne, signsNo);
+    this.life(detail, parked, cafes);
     if (centerPoly) this.placeCenter(g, centerPoly);
 
     // ---------- الحدائق ----------
@@ -808,21 +924,23 @@ export class OsmCity {
     const CAR = [0xf2b705, 0x8a1c1c, 0x2a4a8a, 0xcfcfcf, 0x2b2b2b, 0x5a6b3a, 0xe8e8e8, 0x6a6f78, 0xf2b705, 0x9b7b4a];
     const nP = parked.length / 4;
     if (nP) {
-      const body = new THREE.InstancedMesh(L.carBody, L.paint, nP);
-      const cabin = new THREE.InstancedMesh(L.carCabin, L.glass, nP);
-      const roof = new THREE.InstancedMesh(L.carRoof, L.paint, nP);
-      const wheels = new THREE.InstancedMesh(L.carWheels, L.tire, nP);
+      const P = L.sedan;
+      const body = new THREE.InstancedMesh(P.body, L.paint, nP);
+      const cabin = new THREE.InstancedMesh(P.glass, P.glassMat, nP);
+      const roof = new THREE.InstancedMesh(P.roof, L.paint, nP);
+      const wheels = new THREE.InstancedMesh(P.wheels, P.tireMat, nP);
+      const trim = new THREE.InstancedMesh(P.trim, P.trimMat, nP);
       for (let i = 0; i < nP; i++) {
-        d.position.set(parked[i * 4], 0.12, parked[i * 4 + 1]);
-        d.rotation.set(0, -parked[i * 4 + 2], 0.02);
+        d.position.set(parked[i * 4], 0.06, parked[i * 4 + 1]);
+        d.rotation.set(0.03, -parked[i * 4 + 2], 0.02);
         d.updateMatrix();
-        for (const m of [body, cabin, roof, wheels]) m.setMatrixAt(i, d.matrix);
+        for (const m of [body, cabin, roof, wheels, trim]) m.setMatrixAt(i, d.matrix);
         const ci = Math.floor(parked[i * 4 + 3] * 97) % CAR.length;
         body.setColorAt(i, col.setHex(CAR[ci]));
         roof.setColorAt(i, col.setHex(ci === 0 || ci === 8 ? 0x151515 : CAR[ci])); // التاكسي: سقف أسود
       }
       body.castShadow = roof.castShadow = true;
-      g.add(body, cabin, roof, wheels);
+      g.add(body, cabin, roof, wheels, trim);
     }
     const nC = cafes.length / 4;
     if (nC) {

@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { CONFIG } from './config.js';
+import { makeSedan, makeMicrobus as makeMicrobusPro, makeVanBody, HEAD, TAIL } from './carmodels.js';
 
 // كل العربيات متجهة لقدّام على محور +x
 // الأشكال والخامات مشتركة (cache) عشان الأداء
@@ -108,7 +109,7 @@ function sideDecal(text) {
 }
 
 // عربية الإحضار بتاعة المركز
-export function makeVan() {
+function makeVanOld() {
   const g = new THREE.Group();
   const len = 5.4, wid = 2.2;
   const white = paint(0xf4f4f0, 0.3, 0.2);
@@ -150,7 +151,7 @@ export function makeVan() {
 }
 
 // تاكسي إسكندراني: أصفر تحت وأسود فوق
-export function makeTaxi() {
+function makeTaxiOld() {
   const g = new THREE.Group();
   const len = 4.3, wid = 1.8;
   g.add(mesh(rbox(len, 0.72, wid, 0.16), paint(0xf2b705, 0.35, 0.3), 0, 0.78, 0, true));
@@ -165,7 +166,7 @@ export function makeTaxi() {
   return g;
 }
 
-export function makeCar(color) {
+function makeCarOld(color) {
   const g = new THREE.Group();
   const len = 4.2, wid = 1.8;
   const mat = paint(color, 0.25, 0.6);
@@ -181,7 +182,7 @@ export function makeCar(color) {
 }
 
 // ميكروباص أبيض بشريط أزرق
-export function makeMicrobus() {
+function makeMicrobusOld() {
   const g = new THREE.Group();
   const len = 5.2, wid = 2.0;
   g.add(mesh(rbox(len, 1.85, wid, 0.25), paint(0xeeeeee, 0.4, 0.2), 0, 1.38, 0, true));
@@ -237,4 +238,63 @@ export function makeRandomTraffic(rand = Math.random) {
 export function setNightLights(n) {
   headMat.emissiveIntensity = 0.6 + n * 2.4;
   tailMat.emissiveIntensity = 0.5 + n * 1.6;
+  HEAD.emissiveIntensity = 0.4 + n * 2.6;
+  TAIL.emissiveIntensity = 0.4 + n * 1.8;
+}
+
+// ---------- الموديلات الجديدة ----------
+// تاكسي إسكندراني: أصفر تحت وأسود فوق
+export function makeTaxi() { return makeSedan(0xf2b705, { roof: 0x111111, taxi: true }); }
+export function makeCar(color) { return makeSedan(color); }
+export function makeMicrobus() { return makeMicrobusPro(); }
+void makeTaxiOld; void makeCarOld; void makeMicrobusOld; void makeVanOld;
+
+// عربية الإحضار: فان سقف عالي أبيض بشريط المركز وسارينة
+export function makeVan() {
+  const { g, hw } = makeVanBody(0xf7f7f3, { len: 5.4, high: 1.12 });
+  const len = 5.4, wid = 1.92;
+  // شباك السواق + شبابيك صغيرة ورا
+  const glass = new THREE.MeshPhysicalMaterial({ color: 0x0c141c, roughness: 0.05, metalness: 0.2, clearcoat: 1 });
+  for (const s of [1, -1]) {
+    g.add(mesh(bbox(0.8, 0.55, 0.02), glass, 1.25, 1.75, s * (hw + 0.01)));
+    g.add(mesh(bbox(1.1, 0.4, 0.02), glass, -0.6, 1.95, s * (hw + 0.01)));
+  }
+  const decal = sideDecal(CONFIG.centerShort);
+  for (const s of [1, -1]) {
+    const p = new THREE.Mesh(new THREE.PlaneGeometry(3.4, 0.85), new THREE.MeshStandardMaterial({ map: decal, transparent: true, roughness: 0.4 }));
+    p.position.set(-0.7, 1.3, s * (hw + 0.02));
+    if (s < 0) p.rotation.y = Math.PI;
+    g.add(p);
+  }
+  const back = new THREE.Mesh(new THREE.PlaneGeometry(1.8, 0.28), new THREE.MeshStandardMaterial({ color: 0x0f8f7a }));
+  back.position.set(-len / 2 - 0.09, 1.25, 0);
+  back.rotation.y = -Math.PI / 2;
+  g.add(back);
+  g.add(mesh(bbox(0.03, 1.6, 0.02), darkMat, -len / 2 - 0.09, 1.4, 0)); // باب ورا
+  const red = new THREE.MeshStandardMaterial({ color: 0x330000, emissive: 0xff1010, emissiveIntensity: 0 });
+  const blue = new THREE.MeshStandardMaterial({ color: 0x000033, emissive: 0x1040ff, emissiveIntensity: 0 });
+  const topY = 0.32 + (2.18 - 0.32) * 1.12;
+  g.add(mesh(rbox(0.5, 0.2, 1.5, 0.08), darkMat, 0.8, topY + 0.08, 0));
+  g.add(mesh(rbox(0.42, 0.22, 0.66, 0.08), red, 0.8, topY + 0.2, 0.38));
+  g.add(mesh(rbox(0.42, 0.22, 0.66, 0.08), blue, 0.8, topY + 0.2, -0.38));
+  for (const s of [1, -1]) g.add(mesh(bbox(0.18, 0.14, 0.16), darkMat, 1.7, 1.75, s * (hw + 0.1)));
+  for (const s of [1, -1]) {
+    g.add(mesh(bbox(0.08, 0.2, 0.36), HEAD, len / 2 + 0.06, 0.85, s * (hw - 0.3)));
+    g.add(mesh(bbox(0.08, 0.2, 0.3), TAIL, -len / 2 - 0.08, 0.85, s * (hw - 0.3)));
+  }
+  g.add(mesh(bbox(0.12, 0.22, 1.8, ), darkMat, len / 2 + 0.05, 0.45, 0));
+  g.add(mesh(bbox(0.12, 0.22, 1.8), darkMat, -len / 2 - 0.07, 0.45, 0));
+  const wheels = [];
+  for (const x of [1.75, -1.75]) for (const s of [1, -1]) {
+    const w = new THREE.Group();
+    w.add(new THREE.Mesh(wheelGeo, wheelMat), new THREE.Mesh(hubGeo, hubMat));
+    w.position.set(x, 0.42, s * (hw - 0.14));
+    g.add(w);
+    wheels.push(w);
+  }
+  g.userData.wheels = wheels;
+  g.add(blob(len, wid));
+  g.userData.siren = { red, blue };
+  g.userData.size = { len, wid };
+  return g;
 }
