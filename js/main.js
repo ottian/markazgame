@@ -340,7 +340,7 @@ function boardVan(done) {
   for (const a of [cast.patient, cast.doctor, cast.nurse]) {
     if (!a) continue;
     left++;
-    people.walkTo(a, rx, rz, () => { people.removeActor(a); if (--left === 0) done(); });
+    people.walkTo(a, rx, rz, () => { people.removeActor(a); if (--left === 0) { sfx.playSample('door', { vol: 0.6 }); done(); } });
   }
   if (!left) done();
 }
