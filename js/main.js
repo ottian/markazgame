@@ -858,4 +858,4 @@ function frame() {
 frame();
 
 // للاختبار من الكونسول
-window.__game = { people, city, characters, get frames() { return frames; }, get t() { return t; }, player, get state() { return state; }, get mission() { return mission; }, startGame, newMission, step(n, dt = 1 / 30) { for (let i = 0; i < n; i++) step(dt); } };
+window.__game = { people, city, characters, traffic, osm: () => osm, get frames() { return frames; }, get t() { return t; }, player, get state() { return state; }, get mission() { return mission; }, startGame, newMission, step(n, dt = 1 / 30) { for (let i = 0; i < n; i++) step(dt); } };
