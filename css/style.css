@@ -152,3 +152,28 @@ table.sum tr.tot td { color: var(--gold); font-size: 20px; font-weight: 900; bor
   #minimap { width: 120px; height: 120px; }
   .toast { font-size: 16px; }
 }
+
+/* لوحة البلاغات + GPS + قائمة الاستلام */
+.board { position: absolute; left: 50%; bottom: 120px; transform: translateX(-50%); width: min(560px, calc(100vw - 32px)); background: rgba(14, 18, 26, 0.92); border: 1px solid rgba(242, 194, 48, 0.5); border-radius: 16px; padding: 10px; display: flex; flex-direction: column; gap: 6px; pointer-events: auto; box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6); }
+.board h3 { margin: 2px 6px 4px; font-size: 15px; color: var(--gold); }
+.board button { display: flex; align-items: center; gap: 10px; font: inherit; text-align: right; background: rgba(255, 255, 255, 0.06); color: var(--text); border: 1px solid rgba(255, 255, 255, 0.14); border-radius: 12px; padding: 8px 10px; cursor: pointer; }
+.board button:hover { background: rgba(242, 194, 48, 0.2); }
+.board .ic { font-size: 26px; }
+.board .tx { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.board .tx small { opacity: 0.8; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.board .tx small.k { opacity: 0.6; }
+.board .pay { font-weight: 900; color: #3ad29f; display: flex; flex-direction: column; align-items: center; font-size: 16px; }
+.board .pay small { color: var(--text); opacity: 0.7; font-size: 11px; font-weight: 400; }
+.gps-hint { background: rgba(120, 40, 170, 0.92); color: #fff; font-weight: 900; padding: 5px 12px; border-radius: 10px; font-size: 14px; text-align: center; box-shadow: 0 3px 12px rgba(0, 0, 0, 0.4); }
+.checklist { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 10px; margin-top: 5px; font-size: 12px; }
+.checklist span { opacity: 0.55; }
+.checklist span.ok { opacity: 1; color: #3ad29f; font-weight: 700; }
+.score-box .cash { display: block; margin-top: 2px; font-size: 12px; color: #3ad29f; }
+.score-box .cash b { font-size: 13px; color: #3ad29f; }
+#summary tr.cash td { color: #3ad29f; font-weight: 900; }
+@media (max-width: 700px) { .board { bottom: 150px; } .board .tx small.k { display: none; } }
+.banner { position: absolute; left: 0; right: 0; top: 34%; text-align: center; pointer-events: none; text-shadow: 0 3px 0 #000, 0 0 24px rgba(0, 0, 0, 0.8); }
+.banner b { display: block; font-size: clamp(34px, 7vw, 64px); font-weight: 900; color: var(--gold); letter-spacing: 1px; }
+.banner small { display: block; font-size: clamp(18px, 3vw, 26px); color: #fff; font-weight: 700; }
+.banner.go { animation: bannerIn 2.3s ease both; }
+@keyframes bannerIn { 0% { opacity: 0; transform: scale(1.6); } 12% { opacity: 1; transform: scale(1); } 85% { opacity: 1; } 100% { opacity: 0; } }

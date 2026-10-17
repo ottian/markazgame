@@ -56,7 +56,7 @@
     <div class="hud-top-right">
       <div class="brand"><b>عربية الإحضار</b><small>إسكندرية</small></div>
       <div id="driverCard" class="driver-card"></div>
-      <div class="score-box"><small>النقاط</small><b id="score">٠</b></div>
+      <div class="score-box"><small>النقاط</small><b id="score">٠</b><small class="cash">💵 <b id="cash">٠ ج</b></small></div>
     </div>
 
     <div class="mission">
@@ -64,6 +64,11 @@
       <div id="missionInfo" class="mission-info" hidden>
         <div id="missionCase" class="case"></div>
         <div class="row"><span>⏱ <b id="timer"></b></span><span>📏 <b id="distance"></b></span></div>
+        <div id="checklist" class="checklist" hidden></div>
+      </div>
+      <div id="agitWrap" class="comfort agit" hidden>
+        <small>توتر الحالة</small>
+        <div class="bar"><div id="agitBar"></div></div>
       </div>
       <div id="comfortWrap" class="comfort" hidden>
         <small>راحة الحالة</small>
@@ -77,6 +82,7 @@
 
     <div class="hud-top-left">
       <canvas id="minimap" width="190" height="190"></canvas>
+      <div id="gpsHint" class="gps-hint" hidden></div>
       <div id="district" class="district"></div>
       <div id="clock" class="clock"></div>
     </div>
@@ -91,6 +97,8 @@
     <div id="attrib" class="attrib"></div>
     <div id="dialog" class="dialog" hidden></div>
     <div id="choice" class="choice" hidden></div>
+    <div id="board" class="board" hidden></div>
+    <div id="banner" class="banner" hidden></div>
   </div>
 
   <!-- تحكم اللمس -->

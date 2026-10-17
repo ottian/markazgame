@@ -20,7 +20,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: Download and convert OSM data
-        run: python3 tools/fetch_osm.py
+        run: python3 tools/fetch_osm.py && python3 tools/make_pois.py
       - name: Show size
         run: du -sh data/osm && ls data/osm | wc -l && cat data/osm/index.json | head -c 600
       - name: Commit data

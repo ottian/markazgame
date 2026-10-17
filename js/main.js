@@ -240,11 +240,12 @@ const KEYMAP = {
 window.addEventListener('keydown', (e) => {
   if (KEYMAP[e.code]) { keys[KEYMAP[e.code]] = true; e.preventDefault(); }
   if (e.code === 'KeyQ' || e.code === 'KeyE') toggleSiren();
-  if (e.code === 'KeyH' || e.code === 'Space') { sfx.horn(); e.preventDefault(); }
+  if (e.code === 'KeyH' || e.code === 'Space') { honk(); e.preventDefault(); }
   if (e.code === 'KeyC') camMode = (camMode + 1) % 3;
   if (e.code === 'KeyM') sfx.setMuted(!sfx.muted);
   if (e.code === 'KeyR') cycleRadio(e.shiftKey ? -1 : 1);
   if (mission && mission.choosing && ['Digit1', 'Digit2', 'Digit3'].includes(e.code)) chooseOption(Number(e.code.slice(-1)) - 1);
+  else if (!mission && offers && state === 'playing' && ['Digit1', 'Digit2', 'Digit3', 'Numpad1', 'Numpad2', 'Numpad3'].includes(e.code)) acceptOffer(Number(e.code.slice(-1)) - 1);
   if (e.code === 'KeyP' || e.code === 'Escape') togglePause();
   if (e.code === 'Enter' && state === 'menu') startGame();
   if (e.code === 'Enter' && state === 'summary') nextMission();
@@ -261,7 +262,7 @@ document.querySelectorAll('[data-key]').forEach((b) => {
   b.addEventListener('pointerleave', off);
 });
 $('btnSiren').addEventListener('pointerdown', (e) => { e.preventDefault(); toggleSiren(); });
-$('btnHorn').addEventListener('pointerdown', (e) => { e.preventDefault(); sfx.horn(); });
+$('btnHorn').addEventListener('pointerdown', (e) => { e.preventDefault(); honk(); });
 $('btnCam').addEventListener('pointerdown', (e) => { e.preventDefault(); camMode = (camMode + 1) % 3; });
 $('btnRadio').addEventListener('pointerdown', (e) => { e.preventDefault(); cycleRadio(); });
 // الراديو: مقفول → موسيقى مولّدة → لاسلكي المركز → محطات مصرية حقيقية (بث مباشر)
@@ -393,39 +394,185 @@ function say(staff, text) {
 function hideDialog() { $('dialog').hidden = true; dialogLine = -1; }
 
 // ---------- المهمّات ----------
-function newMission() {
-  if (REAL) {
-    let pk = null;
-    const addr = osm && Math.random() < 0.6 ? osm.randomRoadPoint(player.x, player.z, 300, 1100) : null;
-    if (addr) pk = { pos: addr, name: `عنوان ${placeName(addr.x, addr.z)}` };
-    else {
-      const far = landmarks.filter((l) => Math.hypot(l.x - door.x, l.z - door.z) > 300);
-      const l = far[Math.floor(Math.random() * far.length)] || landmarks[0];
-      let pos = { x: l.x, z: l.z };
-      const nr = osm && osm.nearestRoad(pos.x, pos.z);
-      if (nr && Math.hypot(nr.x - pos.x, nr.z - pos.z) < 150) pos = { x: nr.x, z: nr.z };
-      pk = { pos, name: l.name };
-    }
-    const pool = CONFIG.cases.filter((c) => !c.night || daynight.night > 0.5);
-    const kase = pool[Math.floor(Math.random() * pool.length)];
-    const route = Math.hypot(player.x - pk.pos.x, player.z - pk.pos.z) + Math.hypot(pk.pos.x - door.x, pk.pos.z - door.z);
-    mission = {
-      district: { name: pk.name }, tile: null, pos: pk.pos, kase,
-      limit: Math.round(route * 1.4 / 11 + 45 + kase.calm),
-      elapsed: 0, comfort: 100, hits: 0, calm: 0, handover: 0, aboard: false,
-    };
-    people.clearActors();
-    placePeople(null, pk.pos);
-    pickupMarker.position.set(pk.pos.x, groundY, pk.pos.z);
-    pickupMarker.visible = true;
-    centerMarker.visible = false;
-    sfx.radio();
-    toast(`📞 بلاغ جديد من ${pk.name}`, 5);
-    setTimeout(() => sfx.speak(`بلاغ جديد من ${pk.name}. ${kase.text}`), 700);
-    $('missionCase').textContent = kase.text;
-    state = 'playing';
-    return;
+// كل مهمة عبارة عن مراحل (legs): استلام حالة، تسليم، تدوير على مريض تايه، استلام علاج، توصيل علاج
+const KINDS = {
+  pickup: { icon: '🚑', title: 'إحضار حالة' },
+  search: { icon: '🔎', title: 'مريض تايه' },
+  meds: { icon: '💊', title: 'توصيل علاج' },
+  transfer: { icon: '🏥', title: 'نقل لمستشفى' },
+};
+const CHECKLIST = ['📝 موافقة الأسرة', '📋 التاريخ المرضي', '💊 الأدوية الحالية', '🛏️ تجهيز الترولي'];
+let hospitals = [];
+if (REAL && hasOsm) fetch('data/osm/pois.json').then((r) => r.json()).then((d) => { hospitals = d.hospitals || []; }).catch(() => {});
+let cash = Number(store.get('markaz_cash')) || 0;
+$('cash').textContent = `${toArabicDigits(cash)} ج`;
+let offers = null;
+const rnd = (arr) => arr[Math.floor(Math.random() * arr.length)];
+
+// عنوان على شارع حقيقي (أو معلم لو الشوارع لسه بتحمّل)
+function addrPoint(fx, fz, minD, maxD) {
+  const a = osm && osm.randomRoadPoint(fx, fz, minD, maxD, [4, 5, 6]);
+  if (a) {
+    const st = osm.streetName(a.x, a.z), pl = placeName(a.x, a.z);
+    return { pos: a, name: st ? (pl === 'إسكندرية' ? st : `${st} (${pl})`) : pl };
   }
+  const far = landmarks.filter((l) => { const d = Math.hypot(l.x - fx, l.z - fz); return d > minD && d < maxD * 2.5; });
+  const l = rnd(far.length ? far : landmarks);
+  return l ? { pos: { x: l.x, z: l.z }, name: l.name } : null;
+}
+
+function makeOffer(kind) {
+  const pool = CONFIG.cases.filter((c) => !c.night || daynight.night > 0.5);
+  if (kind === 'pickup') {
+    const a = addrPoint(player.x, player.z, 300, 1100);
+    if (!a) return null;
+    const d = Math.hypot(a.pos.x - player.x, a.pos.z - player.z) + Math.hypot(a.pos.x - door.x, a.pos.z - door.z);
+    return { kind, place: a.name, kase: rnd(pool), dist: d, pay: 120 + Math.round(d / 12),
+      legs: [{ action: 'pickup', pos: a.pos, name: a.name }, { action: 'dropoff', pos: door, name: CONFIG.centerShort }] };
+  }
+  if (kind === 'search') {
+    const a = addrPoint(player.x, player.z, 300, 900);
+    if (!a) return null;
+    const d = Math.hypot(a.pos.x - player.x, a.pos.z - player.z) + Math.hypot(a.pos.x - door.x, a.pos.z - door.z);
+    return { kind, place: a.name, kase: rnd(CONFIG.searchCases), dist: d, pay: 220 + Math.round(d / 10),
+      legs: [{ action: 'search', pos: a.pos, name: a.name }, { action: 'dropoff', pos: door, name: CONFIG.centerShort }] };
+  }
+  if (kind === 'meds') {
+    const ph = addrPoint(player.x, player.z, 150, 600);
+    if (!ph) return null;
+    const home = addrPoint(ph.pos.x, ph.pos.z, 250, 800);
+    if (!home) return null;
+    const d = Math.hypot(ph.pos.x - player.x, ph.pos.z - player.z) + Math.hypot(home.pos.x - ph.pos.x, home.pos.z - ph.pos.z);
+    return { kind, place: home.name, kase: rnd(CONFIG.medsCases), dist: d, pay: 90 + Math.round(d / 14),
+      legs: [{ action: 'collect', pos: ph.pos, name: `صيدلية ${ph.name}` }, { action: 'deliver', pos: home.pos, name: home.name }] };
+  }
+  if (kind === 'transfer') {
+    const hs = hospitals.filter((h) => { const d = Math.hypot(h.x - door.x, h.z - door.z); return d > 500 && d < 4500; });
+    if (!hs.length) return null;
+    const h = rnd(hs);
+    const legs = [{ action: 'pickup', pos: { ...door }, name: CONFIG.centerShort, atCenter: true }];
+    legs.push({ action: 'dropoff', pos: { x: h.x, z: h.z }, name: h.name, hospital: true, snap: true });
+    const d = Math.hypot(door.x - player.x, door.z - player.z) + Math.hypot(h.x - door.x, h.z - door.z);
+    return { kind, place: h.name, kase: rnd(CONFIG.transferCases), dist: d, pay: 160 + Math.round(d / 12), legs };
+  }
+  return null;
+}
+
+// لوحة البلاغات (زي تليفون الألعاب): ٣ بلاغات تختار منهم
+function showOffers() {
+  const kinds = ['pickup', 'search', 'meds', 'transfer'].sort(() => Math.random() - 0.5);
+  if (!kinds.slice(0, 3).includes('pickup')) kinds.unshift('pickup');
+  offers = [];
+  for (const k of kinds) {
+    if (offers.length >= 3) break;
+    const o = makeOffer(k);
+    if (o) offers.push(o);
+  }
+  if (!offers.length) { offers = null; dispatchTimer = 2; return; }
+  const box = $('board');
+  box.hidden = false;
+  box.innerHTML = `<h3>📟 بلاغات الكول سنتر</h3>` + offers.map((o, i) => `
+    <button data-i="${i}"><span class="ic">${KINDS[o.kind].icon}</span>
+      <span class="tx"><b>${toArabicDigits(i + 1)}. ${KINDS[o.kind].title}</b><small>${o.place}</small><small class="k">${o.kase.text}</small></span>
+      <span class="pay">${toArabicDigits(o.pay)} ج<small>${toArabicDigits((o.dist / 1000).toFixed(1))} كم</small></span></button>`).join('');
+  box.querySelectorAll('button').forEach((b) => { b.onclick = () => acceptOffer(Number(b.dataset.i)); });
+  sfx.radio();
+}
+
+function acceptOffer(i) {
+  const o = offers && offers[i];
+  if (!o) return;
+  offers = null;
+  $('board').hidden = true;
+  const kase = o.kase;
+  const est = o.legs.reduce((a, l, j) => a + Math.hypot(l.pos.x - (j ? o.legs[j - 1].pos.x : player.x), l.pos.z - (j ? o.legs[j - 1].pos.z : player.z)), 0);
+  mission = {
+    kind: o.kind, offer: o, kase, legs: o.legs.map((l) => ({ ...l, pos: { ...l.pos } })), leg: -1, pay: o.pay,
+    district: { name: o.place }, pos: o.legs[0].pos,
+    limit: Math.round(est * 1.45 / 10.5 + 50 + (kase.calm || 3) * 2 + (o.kind === 'search' ? 70 : 0) + (o.kind === 'meds' ? 20 : 0)),
+    elapsed: 0, comfort: 100, hits: 0, calm: 0, handover: 0, aboard: false, agit: kase.agit ?? 30, checks: 0, maxAgit: 0,
+  };
+  people.clearActors();
+  cast = {};
+  setLeg(0);
+  sfx.radio();
+  setTimeout(() => sfx.speak(`${KINDS[o.kind].title}. ${kase.text}`), 600);
+  $('missionCase').textContent = `${KINDS[o.kind].icon} ${kase.text}`;
+  state = 'playing';
+}
+
+// مكان المشهد: على الرصيف جنب الشارع (والأسرة عند باب العمارة)
+function sceneSpot(pos, tile) {
+  if (osm) {
+    const nr = osm.nearestRoad(pos.x, pos.z, [2, 3, 4, 5, 6]);
+    if (nr && Math.hypot(nr.x - pos.x, nr.z - pos.z) < 60) {
+      const h = nr.heading, rx = -Math.sin(h), rz = Math.cos(h);
+      const off = nr.road.w / 2 + 1.5;
+      // العربية تقف في الحارة اليمين
+      pos.x = nr.x + rx * nr.road.w * 0.22; pos.z = nr.z + rz * nr.road.w * 0.22;
+      return { x: nr.x + rx * off, z: nr.z + rz * off, faceRoad: Math.atan2(-rz, -rx), side: [Math.cos(h), Math.sin(h)], out: [rx, rz] };
+    }
+  }
+  const dirs = [[0, -1], [0, 1], [-1, 0], [1, 0]];
+  const d = (tile && dirs.find(([dc, dr]) => tileAt(map, tile.c + dc, tile.r + dr) === T.BUILDING)) || [0, -1];
+  return { x: pos.x + d[0] * 6.4, z: pos.z + d[1] * 6.4, faceRoad: Math.atan2(-d[1], -d[0]), side: [-d[1], d[0]], out: d };
+}
+
+function placePeople(spot, withFamily = true) {
+  const s = spot, sd = s.side, o = s.out;
+  cast.spot = s;
+  cast.patient = people.addActor({ x: s.x + sd[0] * 0.7, z: s.z + sd[1] * 0.7, yaw: s.faceRoad, shirt: 0x7aa0c8, pants: 0x2b3245, role: 'patient' });
+  if (withFamily) {
+    cast.family = people.addActor({ x: s.x - sd[0] * 0.7 + o[0] * 0.6, z: s.z - sd[1] * 0.7 + o[1] * 0.6, yaw: s.faceRoad, shirt: 0x6a3a5a, pants: 0x6a3a5a, head: 0x3a2a3a });
+    cast.family2 = people.addActor({ x: s.x - sd[0] * 1.6 + o[0] * 1.1, z: s.z - sd[1] * 1.6 + o[1] * 1.1, yaw: s.faceRoad, shirt: 0xe6e1d3, pants: 0xe6e1d3 });
+  }
+}
+
+function setLeg(i) {
+  const m = mission;
+  m.leg = i;
+  const L = m.legs[i];
+  m.pos = L.pos;
+  m.calm = 0; m.handover = 0; m.sceneT = 0; m.teamOut = false; m.boarding = false; m.checks = 0;
+  m.chosen = false; m.choosing = false; m.extraCalm = 0; m.sirenWarned = false;
+  m.district = { name: L.name };
+  gps.target = null;
+  if (L.action === 'pickup' && !L.atCenter) {
+    const spot = sceneSpot(L.pos, L.tile);
+    placePeople(spot);
+  } else if (L.action === 'pickup' && L.atCenter) {
+    // الحالة مستنية على باب المركز مع ممرض الاستقبال
+    const spot = sceneSpot(L.pos);
+    placePeople(spot, false);
+    cast.family = people.addActor({ x: spot.x - spot.side[0] * 0.8, z: spot.z - spot.side[1] * 0.8, yaw: spot.faceRoad, shirt: 0x1f9a8a, pants: 0x1f9a8a });
+  } else if (L.action === 'deliver') {
+    const spot = sceneSpot(L.pos);
+    cast.spot = spot;
+    cast.family = people.addActor({ x: spot.x, z: spot.z, yaw: spot.faceRoad, shirt: 0x6a3a5a, pants: 0x6a3a5a, head: 0x3a2a3a });
+  } else if (L.action === 'collect') {
+    cast.spot = sceneSpot(L.pos);
+  } else if (L.action === 'search') {
+    // المريض الحقيقي في حتة قريبة من المنطقة (مش في نصها بالظبط)
+    const real = (osm && osm.randomRoadPoint(L.pos.x, L.pos.z, 20, 90, [4, 5, 6])) || { x: L.pos.x + 30, z: L.pos.z };
+    L.real = real;
+    L.r = 130;
+    L.area = { x: L.pos.x + (Math.random() - 0.5) * 60, z: L.pos.z + (Math.random() - 0.5) * 60 };
+    const spot = sceneSpot({ ...real });
+    cast.spot = spot;
+    cast.patient = people.addActor({ x: spot.x, z: spot.z, yaw: spot.faceRoad, shirt: 0xf0ede4, pants: 0xf0ede4, role: 'patient' });
+    cast.wanderT = 0;
+  }
+  const atDoor = L.action === 'dropoff' && !L.hospital;
+  pickupMarker.visible = !atDoor && L.action !== 'search';
+  centerMarker.visible = atDoor;
+  pickupMarker.position.set(L.pos.x, groundY, L.pos.z);
+  $('checklist').hidden = true;
+  $('agitWrap').hidden = true;
+}
+
+function newMission() {
+  if (REAL) { if (!offers) showOffers(); return; }
+  // الخريطة القديمة (المربعات)
   const choices = DISTRICTS.filter((d) => d.key !== 'smouha');
   for (let tries = 0; tries < 20; tries++) {
     const d = choices[Math.floor(Math.random() * choices.length)];
@@ -434,69 +581,112 @@ function newMission() {
     const pos = tileCenter(p.c, p.r);
     if (Math.hypot(pos.x - door.x, pos.z - door.z) < 120) continue;
     const kase = CONFIG.cases[Math.floor(Math.random() * CONFIG.cases.length)];
-    const route = Math.abs(player.x - pos.x) + Math.abs(player.z - pos.z) + Math.abs(pos.x - door.x) + Math.abs(pos.z - door.z);
-    mission = {
-      district: d, tile: p, pos, kase,
-      limit: Math.round(route / 11 + 35 + kase.calm),
-      elapsed: 0, comfort: 100, hits: 0, calm: 0, handover: 0, aboard: false,
-    };
-    people.clearActors();
-    placePeople(p, pos);
-    pickupMarker.position.set(pos.x, 0, pos.z);
-    pickupMarker.visible = true;
-    centerMarker.visible = false;
-    sfx.radio();
-    toast(`📞 بلاغ جديد من ${d.name}`, 5);
-    setTimeout(() => sfx.speak(`بلاغ جديد من ${d.name}. ${kase.text}`), 700);
-    $('missionCase').textContent = kase.text;
-    state = 'playing';
+    const dist = Math.abs(player.x - pos.x) + Math.abs(player.z - pos.z) + Math.abs(pos.x - door.x) + Math.abs(pos.z - door.z);
+    offers = [{ kind: 'pickup', place: d.name, kase, dist, pay: 120 + Math.round(dist / 12),
+      legs: [{ action: 'pickup', pos, name: d.name, tile: p }, { action: 'dropoff', pos: door, name: CONFIG.centerShort }] }];
+    acceptOffer(0);
     return;
   }
 }
 
-function placePeople(p, pos) {
-  // الناس واقفين على الرصيف ناحية المبنى
-  const dirs = [[0, -1], [0, 1], [-1, 0], [1, 0]];
-  let d = (p && dirs.find(([dc, dr]) => tileAt(map, p.c + dc, p.r + dr) === T.BUILDING)) || [0, -1];
-  const ox = pos.x + d[0] * 6.4, oz = pos.z + d[1] * 6.4;
-  const side = [-d[1], d[0]];
-  const faceRoad = Math.atan2(-d[1], -d[0]);
-  cast = {
-    spot: { x: ox, z: oz, faceRoad, side },
-    patient: people.addActor({ x: ox + side[0] * 0.7, z: oz + side[1] * 0.7, yaw: faceRoad, shirt: 0x7aa0c8, pants: 0x2b3245, role: 'patient' }),
-    family: people.addActor({ x: ox - side[0] * 0.7, z: oz - side[1] * 0.7, yaw: faceRoad, shirt: 0x6a3a5a, pants: 0x6a3a5a, head: 0x3a2a3a }),
-    family2: people.addActor({ x: ox - side[0] * 1.6, z: oz - side[1] * 1.6 + 0.3, yaw: faceRoad, shirt: 0xe6e1d3, pants: 0xe6e1d3 }),
-  };
-}
+// نقطة الباب الجانبي (يمين العربية) والباب اللي ورا
+const vanSidePoint = () => ({ x: player.x - Math.sin(player.heading) * 1.6 + Math.cos(player.heading) * 0.4, z: player.z + Math.cos(player.heading) * 1.6 + Math.sin(player.heading) * 0.4 });
+const vanRearPoint = () => ({ x: player.x - Math.cos(player.heading) * 4.0, z: player.z - Math.sin(player.heading) * 4.0 });
 
-// الدكتور والممرض بينزلوا من العربية ويروحوا للحالة
-function teamOut() {
-  const rx = player.x - Math.cos(player.heading) * 4.0, rz = player.z - Math.sin(player.heading) * 4.0;
-  van.userData.van.openRear(true);
-  setTimeout(() => van.userData.van.openRear(false), 3500);
+// الدكتور والممرض بينزلوا من الباب الجانبي ويروحوا للحالة
+function teamOut(who = ['doctor', 'nurse']) {
+  const sp = vanSidePoint();
+  const v = van.userData.van;
+  v.openSide(true);
+  sfx.playSample('door', { vol: 0.5 });
   const s = cast.spot;
-  cast.doctor = people.addActor({ x: rx, z: rz, shirt: 0xf6f6f6, pants: 0x2b3245, role: 'doctor' });
-  cast.nurse = people.addActor({ x: rx + 0.5, z: rz + 0.5, shirt: 0x1f9a8a, pants: 0x1f9a8a, role: 'nurse' });
-  const fwd = [-s.side[1], s.side[0]];
-  people.walkTo(cast.doctor, s.x + fwd[0] * 1.2 + s.side[0] * 0.2, s.z + fwd[1] * 1.2 + s.side[1] * 0.2, (a) => { a.yaw = Math.atan2(s.z - a.z, s.x - a.x); });
-  people.walkTo(cast.nurse, s.x + fwd[0] * 1.2 + s.side[0] * 1.4, s.z + fwd[1] * 1.2 + s.side[1] * 1.4, (a) => { a.yaw = Math.atan2(s.z - a.z, s.x - a.x); });
+  const fwd = [-s.out[0], -s.out[1]];
+  if (who.includes('doctor')) {
+    cast.doctor = people.addActor({ x: sp.x, z: sp.z, shirt: 0xf6f6f6, pants: 0x2b3245, role: 'doctor' });
+    people.walkTo(cast.doctor, s.x + fwd[0] * 1.2 + s.side[0] * 0.2, s.z + fwd[1] * 1.2 + s.side[1] * 0.2, (a) => { a.yaw = Math.atan2(s.z - a.z, s.x - a.x); });
+  }
+  if (who.includes('nurse')) {
+    cast.nurse = people.addActor({ x: sp.x + 0.4, z: sp.z + 0.4, shirt: 0x1f9a8a, pants: 0x1f9a8a, role: 'nurse' });
+    people.walkTo(cast.nurse, s.x + fwd[0] * 1.2 + s.side[0] * 1.4, s.z + fwd[1] * 1.2 + s.side[1] * 1.4, (a) => { a.yaw = Math.atan2(s.z - a.z, s.x - a.x); });
+  }
 }
 
-// الحالة والفريق بيركبوا من الباب اللي ورا
-function boardVan(done) {
-  const rx = player.x - Math.cos(player.heading) * 4.0, rz = player.z - Math.sin(player.heading) * 4.0;
-  van.userData.van.openRear(true);
+// الفريق يرجع العربية من الباب الجانبي
+function teamBack(done) {
+  const sp = vanSidePoint();
   let left = 0;
-  for (const a of [cast.patient, cast.doctor, cast.nurse]) {
-    if (!a) continue;
+  for (const a of [cast.doctor, cast.nurse]) {
+    if (!a || !a.active) continue;
     left++;
-    people.walkTo(a, rx, rz, () => { people.removeActor(a); if (--left === 0) { van.userData.van.openRear(false); sfx.playSample('door', { vol: 0.6 }); setTimeout(() => sfx.thunk && sfx.thunk(), 700); done(); } });
+    people.walkTo(a, sp.x, sp.z, () => { people.removeActor(a); if (--left === 0) { van.userData.van.openSide(false); setTimeout(() => sfx.thunk && sfx.thunk(), 600); done && done(); } });
   }
+  cast.doctor = cast.nurse = null;
+  if (!left) { van.userData.van.openSide(false); done && done(); }
+}
+
+// الحالة على الترولي ورا الممرض والدكتور، ويركبوا من الباب اللي ورا
+function boardVan(done) {
+  const rp = vanRearPoint();
+  van.userData.van.openRear(true);
+  van.userData.van.openSide(false);
+  sfx.playSample('door', { vol: 0.6 });
+  let left = 0;
+  const group = [cast.nurse, cast.patient, cast.doctor].filter((a) => a && a.active);
+  group.forEach((a, k) => {
+    left++;
+    setTimeout(() => people.walkTo(a, rp.x, rp.z, () => {
+      people.removeActor(a);
+      if (--left === 0) { van.userData.van.openRear(false); setTimeout(() => sfx.thunk && sfx.thunk(), 700); done(); }
+    }), k * 450);
+  });
   if (!left) done();
+}
+
+// الحالة اتوترت وجريت — المهمة بتتحول لتدوير
+function patientBolts() {
+  const m = mission, L = m.legs[m.leg];
+  m.bolted = (m.bolted || 0) + 1;
+  m.agit = 70;
+  const a = cast.patient;
+  const run = (osm && osm.randomRoadPoint(a.x, a.z, 60, 140, [4, 5, 6])) || { x: a.x + 80, z: a.z };
+  const spot = sceneSpot({ ...run });
+  a.speed = 3.4;
+  people.walkTo(a, spot.x, spot.z, (b) => { b.speed = 1.2; });
+  hideChoice();
+  teamBack();
+  toast('😟 الحالة اتوترت وجريت! دوّر عليها في المنطقة — ومن غير سارينة', 5);
+  sfx.speak('الحالة جريت. دوّر عليها بالراحة');
+  m.legs[m.leg] = { action: 'search', pos: { x: run.x, z: run.z }, name: L.name, real: run, r: 90, area: { x: (a.x + run.x) / 2, z: (a.z + run.z) / 2 }, chased: true };
+  cast.spot = spot;
+  cast.wanderT = 3;
+  m.pos = m.legs[m.leg].pos;
+  m.calm = 0; m.teamOut = false; m.sceneT = 0; m.checks = 0; m.chosen = true;
+  pickupMarker.visible = false;
+  $('checklist').hidden = true;
+  $('progress').hidden = true;
+}
+
+function hideChoice() { if (mission) mission.choosing = false; $('choice').hidden = true; }
+
+// كلاكس جنب الحالة بيوترها
+function honk() {
+  sfx.horn();
+  const m = mission;
+  if (m && m.legs && m.leg >= 0 && ['pickup', 'search'].includes(m.legs[m.leg].action) && Math.hypot(m.pos.x - player.x, m.pos.z - player.z) < 60) {
+    m.agit = Math.min(100, m.agit + 9);
+    toast('📯 الكلاكس وتّر الحالة', 1.5);
+  }
+}
+
+function setChecklist(m) {
+  const box = $('checklist');
+  box.hidden = false;
+  box.innerHTML = CHECKLIST.map((c, i) => `<span class="${i < m.checks ? 'ok' : ''}">${i < m.checks ? '✔' : '○'} ${c}</span>`).join('');
 }
 
 function updateMission(dt) {
   if (!mission) {
+    if (offers) { $('objective').textContent = 'اختار بلاغ من اللوحة (١ / ٢ / ٣)'; $('missionInfo').hidden = true; return; }
     dispatchTimer -= dt;
     $('objective').textContent = 'مستني بلاغ من الكول سنتر...';
     $('missionInfo').hidden = true;
@@ -504,64 +694,177 @@ function updateMission(dt) {
     return;
   }
   const m = mission;
+  const L = m.legs[m.leg];
   m.elapsed += dt;
   const remain = Math.max(0, m.limit - m.elapsed);
   $('missionInfo').hidden = false;
+  $('missionCase').hidden = m.elapsed > 14 && !m.teamOut; // نص البلاغ بيختفي بعد شوية عشان الشاشة تفضى
   $('timer').textContent = `${toArabicDigits(Math.floor(remain / 60))}:${toArabicDigits(String(Math.floor(remain % 60)).padStart(2, '0'))}`;
   $('timer').classList.toggle('late', remain <= 0);
 
-  const target = m.aboard ? door : m.pos;
-  const dist = Math.hypot(target.x - player.x, target.z - player.z);
-  $('distance').textContent = `${toArabicDigits(Math.round(dist))} م`;
+  // المستشفى: نثبّت العلامة على أقرب شارع لما نقرّب والشوارع تحمّل
+  if (L.snap && osm && Math.hypot(L.pos.x - player.x, L.pos.z - player.z) < 450) {
+    const nr = osm.nearestRoad(L.pos.x, L.pos.z, [2, 3, 4, 5, 6]);
+    if (nr && Math.hypot(nr.x - L.pos.x, nr.z - L.pos.z) < 160) { L.pos.x = nr.x; L.pos.z = nr.z; pickupMarker.position.set(nr.x, groundY, nr.z); L.snap = false; }
+  }
+  const dist = Math.hypot(L.pos.x - player.x, L.pos.z - player.z);
+  $('distance').textContent = `${toArabicDigits(Math.round(gps.len || dist))} م`;
   const stopped = Math.abs(player.speed) < 1.5;
   const zoneR = REAL ? 14 : 6.5;
+  m.hazard = false;
+  const nearScene = dist < 90;
 
-  if (!m.aboard) {
-    $('objective').textContent = `روح لـ ${m.district.name} (العلامة البرتقاني)`;
+  // التوتر: السارينة جنب الحالة بتوترها
+  if ((L.action === 'pickup' || L.action === 'search') && !m.aboard) {
+    if (player.siren && (nearScene || (L.action === 'search' && L.found))) {
+      m.agit = Math.min(100, m.agit + 7 * dt);
+      if (!m.sirenWarned) { m.sirenWarned = true; toast('🔇 اطفي السارينة — صوتها بيوتّر الحالة', 3); }
+    }
+    m.maxAgit = Math.max(m.maxAgit, m.agit);
+    $('agitWrap').hidden = !(nearScene || L.found);
+    $('agitBar').style.width = `${m.agit}%`;
+    $('agitBar').style.background = m.agit < 40 ? '#3ad29f' : m.agit < 70 ? '#f2c230' : '#ff5a4a';
+  } else $('agitWrap').hidden = true;
+
+  if (L.action === 'search') {
+    const p = cast.patient;
+    $('objective').textContent = L.found ? 'لقيته! اركن جنبه بالراحة (العلامة البرتقاني)' : `دوّر على المريض في المنطقة المعلّمة — ${L.name}`;
+    // المريض بيتمشّى حوالين مكانه
+    if (p && !L.found && !p.walking) {
+      cast.wanderT -= dt;
+      if (cast.wanderT <= 0) {
+        cast.wanderT = 4 + Math.random() * 5;
+        const s = cast.spot;
+        people.walkTo(p, s.x + s.side[0] * (Math.random() - 0.5) * 24, s.z + s.side[1] * (Math.random() - 0.5) * 24);
+      }
+    }
+    // بعد دقيقة: الكول سنتر بيدّي معلومة تصغّر المنطقة
+    if (!L.found && !L.hinted && m.elapsed > (L.chased ? 25 : 60)) {
+      L.hinted = true;
+      L.r = 60;
+      L.area = { x: p.x + (Math.random() - 0.5) * 30, z: p.z + (Math.random() - 0.5) * 30 };
+      sfx.radioBeep();
+      toast('📻 الكول سنتر: واحد من الجيران شافه — المنطقة صغرت', 4);
+    }
+    if (p && !L.found && Math.hypot(p.x - player.x, p.z - player.z) < 38) {
+      L.found = true;
+      sfx.ding();
+      toast('👀 شايفه! اركن جنبه بهدوء ومن غير سارينة', 4);
+      // المشهد بيتحوّل لاستلام عادي عند مكان المريض
+      const spot = sceneSpot({ x: p.x, z: p.z });
+      people.walkTo(p, spot.x, spot.z, (a) => { a.yaw = spot.faceRoad; });
+      const pos = { x: p.x, z: p.z };
+      sceneSpot(pos);
+      cast.spot = spot;
+      m.legs[m.leg] = { action: 'pickup', pos, name: L.name, found: true };
+      m.pos = pos;
+      m.calm = 0; m.teamOut = false; m.sceneT = 0; m.checks = 0;
+      if (!m.kase.choice) m.chosen = true;
+      pickupMarker.position.set(pos.x, groundY, pos.z);
+      pickupMarker.visible = true;
+    }
+    return;
+  }
+
+  if (L.action === 'pickup') {
+    $('objective').textContent = L.atCenter ? `الحالة مستنياك على باب ${CONFIG.centerShort}` : `روح لـ ${L.name} (العلامة البرتقاني)`;
     if (m.boarding) {
-      $('progressLabel').textContent = 'الحالة بتركب العربية...';
-      if (!stopped || dist > 8) { people.clearActors(); finishBoarding(); }
-    } else if (dist < zoneR && stopped) {
-      if (!m.teamOut) { m.teamOut = true; teamOut(); }
+      $('progressLabel').textContent = 'الحالة بتركب على الترولي...';
+      m.hazard = true;
+      if (!stopped || dist > 10) { people.clearActors(); finishBoarding(); }
+      return;
+    }
+    if (dist < zoneR && stopped) {
+      m.hazard = true;
+      if (!m.teamOut) { m.teamOut = true; m.sceneT = 0; teamOut(L.atCenter ? ['nurse'] : ['doctor', 'nurse']); }
+      m.sceneT += dt;
+      if (m.sceneT < 2.2) { $('progress').hidden = false; $('progressLabel').textContent = 'الفريق نازل من الباب الجانبي...'; $('progressBar').style.width = '0%'; return; }
+      if (m.agit >= 100) { patientBolts(); return; }
       // قرار في نص المهمة
-      if (m.kase.choice && !m.chosen && m.calm / m.kase.calm > 0.35) {
+      const need = (L.atCenter ? 2 : m.kase.calm || 3) + (m.extraCalm || 0);
+      if (!L.atCenter && m.kase.choice && !m.chosen && m.calm / need > 0.35) {
         if (!m.choosing) showChoice(m.kase.choice);
         $('progressLabel').textContent = 'اختار هتتصرفوا إزاي (١ / ٢ / ٣)';
+        m.agit = Math.min(100, m.agit + dt * 1.5); // التأخير بيوتّر
         return;
       }
-      m.calm += dt;
-      const frac = m.calm / (m.kase.calm + (m.extraCalm || 0));
+      // كل ما الحالة متوترة، الكلام بياخد وقت أطول
+      const rate = Math.max(0.25, 1.15 - m.agit / 110);
+      m.calm += dt * rate;
+      m.agit = Math.max(0, m.agit - dt * 2.2);
+      const frac = m.calm / need;
       $('progress').hidden = false;
       $('progressBar').style.width = `${Math.min(100, frac * 100)}%`;
-      $('progressLabel').textContent = 'الفريق بيتكلم مع الحالة والأسرة...';
+      $('progressLabel').textContent = L.atCenter ? 'الممرض بيسلّمك ملف الحالة...' : m.agit > 70 ? 'الحالة متوترة جدًا — الفريق بيهدّيها...' : 'الفريق بيتكلم مع الحالة والأسرة...';
+      const checks = Math.min(4, Math.floor(frac * 4.4));
+      if (checks !== m.checks) { m.checks = checks; if (checks) sfx.radioBeep(); }
+      if (!L.atCenter) setChecklist(m);
       const line = Math.min(2, Math.floor(frac * 3));
-      if (line !== dialogLine && !(m.chosen && line === 1)) {
+      if (!L.atCenter && line !== dialogLine && !(m.chosen && line === 1)) {
         dialogLine = line;
-        if (line === 0) say(pick('doctor'), `مساء الخير، إحنا فريق ${CONFIG.centerShort}. خلّينا نتكلم بهدوء ونفهم محتاجين إيه.`);
+        if (line === 0) say(pick('doctor'), L.found ? 'إزيك يا حبيبي، إحنا جايين ناخدك البيت بأمان. ممكن نتكلم دقيقة؟' : `مساء الخير، إحنا فريق ${CONFIG.centerShort}. خلّينا نتكلم بهدوء ونفهم محتاجين إيه.`);
         if (line === 1) say(pick('nurse'), 'متقلقش خالص، إحنا معاك خطوة بخطوة. خد نفس عميق.');
-        if (line === 2) say(pick('social'), 'الأسرة مطمّنة وجاية ورانا. يلا بينا على المركز بالراحة.');
+        if (line === 2) say(pick('social'), 'الأسرة مضيّت الموافقة وجاية ورانا. يلا بينا بالراحة.');
       }
       if (frac >= 1) {
         m.boarding = true;
+        $('checklist').hidden = true;
         boardVan(finishBoarding);
       }
-    } else if (m.calm > 0 && m.calm < m.kase.calm) {
-      $('progressLabel').textContent = 'اقف جوّه الدايرة عشان الفريق يكمّل';
+    } else if (m.teamOut && !m.boarding) {
+      // العربية اتحركت والفريق برّه!
+      $('progressLabel').textContent = 'ارجع اقف جوّه الدايرة — الفريق لسه برّه';
+      if (dist > 25) { toast('⚠️ سبت الفريق في الشارع! ارجع', 2); }
     } else {
       $('progress').hidden = true;
     }
-  } else {
-    $('objective').textContent = `رجّع الحالة لـ ${CONFIG.centerShort} (العلامة الخضرا)`;
+    return;
+  }
+
+  if (L.action === 'collect' || L.action === 'deliver') {
+    const collect = L.action === 'collect';
+    $('objective').textContent = collect ? `استلم العلاج من ${L.name}` : `وصّل العلاج لـ ${L.name}`;
     if (dist < zoneR && stopped) {
-      if (!m.handover) van.userData.van.openRear(true);
-      m.handover += dt;
+      m.hazard = true;
+      if (!m.teamOut) {
+        m.teamOut = true;
+        m.sceneT = 0;
+        teamOut(['nurse']);
+        if (!collect) say(pick('nurse'), 'السلام عليكم يا حاجّة، ده العلاج. الجرعة زي ما الدكتور كاتب بالظبط، ولو فيه أي حاجة كلّمونا على طول.');
+      }
+      m.sceneT += dt;
+      const need = collect ? 6 : 8;
       $('progress').hidden = false;
-      $('progressBar').style.width = `${Math.min(100, (m.handover / 2.5) * 100)}%`;
-      $('progressLabel').textContent = 'تسليم الحالة لفريق الاستقبال...';
-      if (m.handover >= 2.5) finishMission();
-    } else {
+      $('progressBar').style.width = `${Math.min(100, (m.sceneT / need) * 100)}%`;
+      $('progressLabel').textContent = collect ? 'الممرض بيستلم العلاج ويراجع الروشتة...' : 'الممرض بيشرح الجرعات للأسرة...';
+      if (m.sceneT >= need && !m.returning) {
+        m.returning = true;
+        teamBack(() => {
+          m.returning = false;
+          if (collect) { toast('💊 العلاج معاك — وصّله بسرعة', 3); sfx.ding(); setLeg(m.leg + 1); }
+          else finishMission();
+        });
+      }
+    } else if (m.teamOut && !m.returning) {
+      $('progressLabel').textContent = 'ارجع اقف — الممرض لسه برّه';
+    } else if (!m.returning) {
       $('progress').hidden = true;
     }
+    return;
+  }
+
+  // dropoff: تسليم الحالة (المركز أو طوارئ المستشفى)
+  $('objective').textContent = L.hospital ? `وصّل الحالة لطوارئ ${L.name}` : `رجّع الحالة لـ ${CONFIG.centerShort} (العلامة الخضرا)`;
+  if (dist < zoneR && stopped) {
+    m.hazard = true;
+    if (!m.handover) { van.userData.van.openRear(true); sfx.playSample('door', { vol: 0.5 }); }
+    m.handover += dt;
+    $('progress').hidden = false;
+    $('progressBar').style.width = `${Math.min(100, (m.handover / 3) * 100)}%`;
+    $('progressLabel').textContent = L.hospital ? 'تسليم الحالة لطوارئ المستشفى...' : 'تسليم الحالة لفريق الاستقبال...';
+    if (m.handover >= 3) finishMission();
+  } else {
+    $('progress').hidden = true;
   }
   $('comfortWrap').hidden = !m.aboard;
   $('comfortBar').style.width = `${m.comfort}%`;
@@ -587,11 +890,12 @@ function chooseOption(i) {
   m.chosen = true;
   m.extraCalm = o.calm;
   m.comfort = clamp(m.comfort + o.comfort, 0, 100);
+  m.agit = clamp(m.agit + (o.score > 0 ? -o.score / 3 : 30), 0, 100);
   m.choiceScore = o.score;
   m.choiceText = o.text;
   $('choice').hidden = true;
   say(pick(o.role), o.reply);
-  toast(o.score > 0 ? '👍 قرار سليم' : '👎 القرار ده ضايق الحالة', 2.5);
+  toast(o.score > 0 ? '👍 قرار سليم — الحالة هديت' : '👎 القرار ده وتّر الحالة', 2.5);
 }
 
 function finishBoarding() {
@@ -599,23 +903,35 @@ function finishBoarding() {
   if (!m || m.aboard) return;
   m.boarding = false;
   m.aboard = true;
-  pickupMarker.visible = false;
-  centerMarker.visible = true;
   $('progress').hidden = true;
+  $('checklist').hidden = true;
+  $('agitWrap').hidden = true;
   sfx.ding();
-  toast('✅ الحالة ركبت — سوق بهدوء ورجّعها المركز', 4);
+  // الحالة ركبت متوترة؟ الراحة بتبدأ أقل
+  m.comfort = clamp(m.comfort - Math.max(0, m.agit - 40) * 0.5, 0, 100);
+  toast('✅ الحالة ركبت — سوق بهدوء', 4);
   setTimeout(hideDialog, 2500);
+  setLeg(m.leg + 1);
 }
 
 function finishMission() {
   const m = mission;
   const remain = Math.max(0, m.limit - m.elapsed);
+  const carried = m.kind !== 'meds';
   const timeBonus = Math.round(remain * 3);
-  const comfortBonus = Math.round(m.comfort * 3);
+  const comfortBonus = carried ? Math.round(m.comfort * 3) : 0;
   const choiceBonus = m.choiceScore || 0;
+  const calmBonus = carried ? Math.round(Math.max(0, 70 - m.maxAgit) * 2) : 0;
+  const boltPenalty = (m.bolted || 0) * 120;
   const hard = (daynight.night > 0.6 ? 0.2 : 0) + (weather.value > 0.3 ? 0.3 : 0);
   const hardBonus = Math.round((150 + timeBonus + comfortBonus) * hard);
-  const total = Math.max(0, 150 + timeBonus + comfortBonus + choiceBonus + hardBonus);
+  const total = Math.max(0, 150 + timeBonus + comfortBonus + choiceBonus + calmBonus + hardBonus - boltPenalty);
+  const stars = carried ? (m.comfort >= 85 && !m.bolted ? 3 : m.comfort >= 60 ? 2 : 1) : (remain > 0 ? 3 : 2);
+  const tip = stars === 3 ? Math.round(m.pay * 0.25) : stars === 2 ? Math.round(m.pay * 0.1) : 0;
+  const late = remain <= 0 ? Math.round(m.pay * 0.2) : 0;
+  const earned = m.pay + tip - late;
+  cash += earned;
+  store.set('markaz_cash', String(cash));
   const oldRank = rankOf(xp);
   xp += total;
   store.set('markaz_xp', String(xp));
@@ -628,29 +944,44 @@ function finishMission() {
     best = score;
     try { localStorage.setItem('markaz_best', String(best)); } catch { /* ignore */ }
   }
-  const stars = m.comfort >= 85 ? 3 : m.comfort >= 60 ? 2 : 1;
   sfx.ding();
   people.clearActors();
-  setTimeout(() => van.userData.van.openRear(false), 1500);
+  setTimeout(() => { van.userData.van.openRear(false); van.userData.van.openSide(false); }, 1500);
   centerMarker.visible = false;
+  pickupMarker.visible = false;
   $('progress').hidden = true;
   $('comfortWrap').hidden = true;
+  $('agitWrap').hidden = true;
+  $('checklist').hidden = true;
   state = 'summary';
-  $('summary').hidden = false;
+  // بانر "المهمة تمّت" الكبير قبل الملخّص
+  const bn = $('banner');
+  bn.innerHTML = `<b>المهمة تمّت</b><small>+${toArabicDigits(earned)} ج · ${'★'.repeat(stars)}</small>`;
+  bn.hidden = false;
+  bn.classList.remove('go'); void bn.offsetWidth; bn.classList.add('go');
+  setTimeout(() => { bn.hidden = true; if (state === 'summary') $('summary').hidden = false; }, 2300);
   $('sumStars').textContent = '★'.repeat(stars) + '☆'.repeat(3 - stars);
+  const row = (a, b) => `<tr><td>${a}</td><td>${b}</td></tr>`;
   $('sumRows').innerHTML = `
-    <tr><td>توصيل الحالة</td><td>${toArabicDigits(150)}</td></tr>
-    <tr><td>الوقت (${remain > 0 ? 'بدري' : 'متأخر'})</td><td>${toArabicDigits(timeBonus)}</td></tr>
-    <tr><td>راحة الحالة ${toArabicDigits(Math.round(m.comfort))}٪</td><td>${toArabicDigits(comfortBonus)}</td></tr>
-    <tr><td>خبطات</td><td>${toArabicDigits(m.hits)}</td></tr>
-    ${m.choiceText ? `<tr><td>قرارك: ${m.choiceText}</td><td>${m.choiceScore < 0 ? '−' : ''}${toArabicDigits(Math.abs(m.choiceScore))}</td></tr>` : ''}
-    ${hardBonus ? `<tr><td>${daynight.night > 0.6 ? 'شغل ليل' : ''}${daynight.night > 0.6 && weather.value > 0.3 ? ' + ' : ''}${weather.value > 0.3 ? 'مطر' : ''}</td><td>${toArabicDigits(hardBonus)}</td></tr>` : ''}
-    <tr class="tot"><td>المجموع</td><td>${toArabicDigits(total)}</td></tr>`;
+    ${row(`${KINDS[m.kind].icon} ${KINDS[m.kind].title}`, toArabicDigits(150))}
+    ${row(`الوقت (${remain > 0 ? 'بدري' : 'متأخر'})`, toArabicDigits(timeBonus))}
+    ${carried ? row(`راحة الحالة ${toArabicDigits(Math.round(m.comfort))}٪`, toArabicDigits(comfortBonus)) : ''}
+    ${carried ? row(`هدوء الحالة (أعلى توتر ${toArabicDigits(Math.round(m.maxAgit))}٪)`, toArabicDigits(calmBonus)) : ''}
+    ${m.bolted ? row('الحالة جريت منكم', '−' + toArabicDigits(boltPenalty)) : ''}
+    ${row('خبطات', toArabicDigits(m.hits))}
+    ${m.choiceText ? row(`قرارك: ${m.choiceText}`, `${m.choiceScore < 0 ? '−' : ''}${toArabicDigits(Math.abs(m.choiceScore))}`) : ''}
+    ${hardBonus ? row(`${daynight.night > 0.6 ? 'شغل ليل' : ''}${daynight.night > 0.6 && weather.value > 0.3 ? ' + ' : ''}${weather.value > 0.3 ? 'مطر' : ''}`, toArabicDigits(hardBonus)) : ''}
+    <tr class="tot"><td>المجموع</td><td>${toArabicDigits(total)}</td></tr>
+    <tr class="cash"><td>💵 الأجرة ${toArabicDigits(m.pay)}${tip ? ` + بقشيش ${toArabicDigits(tip)}` : ''}${late ? ` − تأخير ${toArabicDigits(late)}` : ''}</td><td>${toArabicDigits(earned)} ج</td></tr>`;
   $('sumTip').textContent =
+    m.bolted ? 'الحالة جريت لما اتوترت — اطفي السارينة بدري، متزمّرش، واختار القرارات الهادية.' :
+    !carried ? (remain > 0 ? 'العلاج وصل في معاده. شغل نضيف!' : 'العلاج وصل متأخر — المرة الجاية خد طريق الـGPS.') :
     m.comfort >= 85 ? 'سواقة ممتازة! الحالة وصلت مرتاحة ومطمّنة.' :
     m.comfort >= 60 ? 'كويس — حاول تفرمل بالراحة وتقلّل السارينة والحالة معاك.' :
     'الحالة اتوترت في الطريق: خبطات وفرامل جامدة. المرة الجاية براحة.';
   mission = null;
+  gps.route = null;
+  $('cash').textContent = `${toArabicDigits(cash)} ج`;
 }
 
 function nextMission() {
@@ -659,6 +990,64 @@ function nextMission() {
   state = 'playing';
 }
 $('btnNext').addEventListener('click', nextMission);
+
+// ---------- GPS ----------
+const gps = { route: null, target: null, timer: 0, len: 0, hint: '' };
+function updateGps(dt) {
+  const m = mission;
+  let tgt = null;
+  if (m && m.leg >= 0) {
+    const L = m.legs[m.leg];
+    tgt = L.action === 'search' ? (L.found ? L.pos : L.area) : L.pos;
+  }
+  if (!tgt || !osm) { gps.route = null; gps.len = 0; $('gpsHint').hidden = true; return; }
+  gps.timer -= dt;
+  const moved = gps.target && (gps.target.x !== tgt.x || gps.target.z !== tgt.z);
+  // نعيد الحساب كل شوية، أو لو العربية بعدت عن الطريق
+  let off = 0;
+  if (gps.route) {
+    let bd = Infinity;
+    for (let i = 0; i < Math.min(gps.route.length, 40); i += 2) bd = Math.min(bd, Math.hypot(gps.route[i] - player.x, gps.route[i + 1] - player.z));
+    off = bd;
+  }
+  if (!gps.route || moved || gps.timer <= 0 || off > 25) {
+    gps.timer = 2.5;
+    gps.target = { x: tgt.x, z: tgt.z };
+    gps.route = Math.hypot(tgt.x - player.x, tgt.z - player.z) > 30 ? osm.route(player.x, player.z, tgt.x, tgt.z) : null;
+  }
+  // نشيل النقط اللي عدّيناها
+  const r = gps.route;
+  if (r && r.length >= 4) {
+    let bi = 0, bd = Infinity;
+    for (let i = 0; i < Math.min(r.length, 60); i += 2) { const d = Math.hypot(r[i] - player.x, r[i + 1] - player.z); if (d < bd) { bd = d; bi = i; } }
+    if (bi > 0) r.splice(0, bi);
+    let len = 0;
+    for (let i = 2; i < r.length; i += 2) len += Math.hypot(r[i] - r[i - 2], r[i + 1] - r[i - 1]);
+    gps.len = len + Math.hypot(r[0] - player.x, r[1] - player.z) + Math.hypot(tgt.x - r[r.length - 2], tgt.z - r[r.length - 1]);
+    // اللفّة الجاية
+    let run = Math.hypot(r[0] - player.x, r[1] - player.z), hint = '';
+    for (let i = 2; i < r.length - 2; i += 2) {
+      const ax = r[i] - r[i - 2], az = r[i + 1] - r[i - 1];
+      // اتجاه الخروج: أول نقطة بعيدة شوية (عشان الكيرفات الصغيرة متتحسبش لفّة)
+      let j = i + 2;
+      while (j < r.length - 2 && Math.hypot(r[j] - r[i], r[j + 1] - r[i + 1]) < 8) j += 2;
+      const bx = r[j] - r[i], bz = r[j + 1] - r[i + 1];
+      run += Math.hypot(ax, az);
+      const la = Math.hypot(ax, az), lb = Math.hypot(bx, bz);
+      if (la < 0.5 || lb < 0.5) continue;
+      const cross = (ax * bz - az * bx) / (la * lb), dot = (ax * bx + az * bz) / (la * lb);
+      if (dot < 0.6) {
+        hint = `${cross > 0 ? '↱ لف يمين' : '↰ لف شمال'} بعد ${toArabicDigits(Math.max(10, Math.round(run / 10) * 10))} م`;
+        break;
+      }
+      if (run > 600) break;
+    }
+    gps.hint = hint || '⬆ كمّل على طول';
+  } else { gps.len = Math.hypot(tgt.x - player.x, tgt.z - player.z); gps.hint = ''; }
+  $('gpsHint').hidden = !gps.hint;
+  $('gpsHint').textContent = gps.hint;
+}
+
 
 // ---------- الفيزيا ----------
 const VAN_LEN = 5.4, VAN_WID = 2.2;
@@ -861,10 +1250,19 @@ mmBase.height = ROWS * MM_SCALE;
 }
 const mm = $('minimap');
 const mmg = mm.getContext('2d');
+function missionTarget() {
+  if (!mission || mission.leg < 0) return null;
+  const L = mission.legs[mission.leg];
+  return L.action === 'search' && !L.found ? L.area : L.pos;
+}
 function drawMinimap() {
   if (REAL) {
-    const target = mission ? (mission.aboard ? door : mission.pos) : null;
-    if (osm) osm.drawMinimap(mmg, mm.width, player, target, door, landmarks);
+    const target = missionTarget();
+    const L = mission && mission.leg >= 0 ? mission.legs[mission.leg] : null;
+    const extra = { route: gps.route };
+    if (L && L.action === 'search' && !L.found) { extra.search = { x: L.area.x, z: L.area.z, r: L.r }; extra.hideTarget = true; }
+    if (L && L.hospital) extra.targetColor = '#5aa0ff';
+    if (osm) osm.drawMinimap(mmg, mm.width, player, target, door, landmarks, extra);
     else city.drawMinimap(mmg, mm.width, player, target);
     return;
   }
@@ -957,6 +1355,7 @@ function step(dt) {
   if (state === 'playing') {
     updatePlayer(dt);
     updateMission(dt);
+    if (REAL) updateGps(dt);
   }
   const isRoad = REAL ? () => false : (x, z) => !solidAt(map, x, z);
   pedsOnRoad = people.onRoad(isRoad);
@@ -982,7 +1381,7 @@ function step(dt) {
   // سارينة
   van.userData.van.update(dt, {
     braking: keys.down && player.speed > 0.5, reversing: player.speed < -0.3, steer: player.steer, speed: player.speed,
-    night: daynight.night, siren: player.siren, time: t,
+    night: daynight.night, siren: player.siren, time: t, hazard: !!(mission && mission.hazard) && state !== 'menu',
   });
   for (const hl of headLights) hl.intensity = daynight.night * 90 + weather.value * 20;
   poolMat.opacity = Math.min(0.55, daynight.night * 0.6 + weather.value * 0.1);
@@ -994,7 +1393,7 @@ function step(dt) {
   }
 
   // سهم الاتجاه
-  const target = mission ? (mission.aboard ? door : mission.pos) : null;
+  const target = missionTarget();
   arrow.visible = !!target && state === 'playing' && camMode !== 1;
   if (target) {
     arrow.position.set(player.x, groundY + 4.2 + Math.sin(t * 3) * 0.2, player.z);
@@ -1043,7 +1442,7 @@ function step(dt) {
   updateSkyEnv();
   egRadio.duck(player.siren ? 0.45 : !$('dialog').hidden ? 0.5 : 1);
   if (post) post.grading(daynight.night, weather.value, t);
-  if (osm) osm.setWet(weather.value);
+  if (osm) { osm.setWet(weather.value); osm.setNight(daynight.night); }
   weather.update(dt, camera.position, () => sfx.thunder());
   if (weather.flash > 0) world.hemi.intensity += weather.flash * 4;
   sfx.setRain(weather.value);
@@ -1068,4 +1467,4 @@ function frame() {
 frame();
 
 // للاختبار من الكونسول
-window.__game = { vanApi: van.userData.van, radio: egRadio, people, city, characters, traffic, osm: () => osm, get frames() { return frames; }, get t() { return t; }, player, get state() { return state; }, get mission() { return mission; }, startGame, newMission, step(n, dt = 1 / 30) { for (let i = 0; i < n; i++) step(dt); } };
+window.__game = { get offers() { return offers; }, gps, forceMission(k) { const o = makeOffer(k); if (!o) return false; offers = [o]; acceptOffer(0); return true; }, vanApi: van.userData.van, radio: egRadio, people, city, characters, traffic, osm: () => osm, get frames() { return frames; }, get t() { return t; }, player, get state() { return state; }, get mission() { return mission; }, startGame, newMission, step(n, dt = 1 / 30) { for (let i = 0; i < n; i++) step(dt); } };

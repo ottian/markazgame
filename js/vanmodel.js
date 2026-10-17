@@ -319,7 +319,7 @@ export function makeDetailedVan() {
     openSide(v = true) { slideTarget = v ? 1 : 0; },
     get open() { return doorT > 0.05 || slideT > 0.05; },
     rearDoorPoint() { return new THREE.Vector3(rearX - 1.2, 0, 0); },
-    update(dt, { braking = false, reversing = false, steer = 0, speed = 0, night = 0, siren = false, time = 0 }) {
+    update(dt, { braking = false, reversing = false, steer = 0, speed = 0, night = 0, siren = false, time = 0, hazard = false }) {
       // الأبواب بتتفتح بنعومة
       doorT += Math.sign(doorTarget - doorT) * Math.min(Math.abs(doorTarget - doorT), dt * 1.2);
       slideT += Math.sign(slideTarget - slideT) * Math.min(Math.abs(slideTarget - slideT), dt * 0.9);
@@ -339,8 +339,9 @@ export function makeDetailedVan() {
       blink += dt;
       const on = Math.floor(blink * 2.6) % 2 === 0;
       const turning = Math.abs(steer) > 0.35 && Math.abs(speed) < 9;
-      M.amberL.emissiveIntensity = turning && steer < 0 && on ? 3 : 0;
-      M.amberR.emissiveIntensity = turning && steer > 0 && on ? 3 : 0;
+      // فلاشر (الانتظار): الاتنين مع بعض
+      M.amberL.emissiveIntensity = ((turning && steer < 0) || hazard) && on ? 3 : 0;
+      M.amberR.emissiveIntensity = ((turning && steer > 0) || hazard) && on ? 3 : 0;
       // السارينة: نبض أحمر/أزرق متبادل
       const ph = Math.floor(time * 8) % 4;
       M.red.emissiveIntensity = siren && (ph === 0 || ph === 2) ? 6 : 0;

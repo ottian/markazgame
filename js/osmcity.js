@@ -125,6 +125,7 @@ export class OsmCity {
     this.signals = new Map(); // مفتاح التقاطع → {x, z, axis, w}
     this.phaseT = 0;
     this.bumps = [];
+    this.pois = []; // مستشفيات ومدارس ومساجد (للمهمات)
     this.nameTex = new Map();
     // يافطة المركز
     {
@@ -260,6 +261,70 @@ export class OsmCity {
         catMat: new THREE.MeshLambertMaterial({ color: 0xc08a4a }),
       };
     }
+    {
+      // تفاصيل الشارع والعمارات: تندات ويافطات المحلات، تكييفات، غسيل منشور، صناديق زبالة، أكشاك، سلوك، بِرك مطر
+      const cv = (w, h, draw) => { const c = document.createElement('canvas'); c.width = w; c.height = h; draw(c.getContext('2d'), w, h); const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4; return t; };
+      const stripes = cv(16, 64, (g2, w, h) => { for (let i = 0; i < 8; i++) { g2.fillStyle = i % 2 ? '#8e8a84' : '#ffffff'; g2.fillRect(0, i * 8, w, 8); } g2.fillStyle = 'rgba(0,0,0,0.3)'; g2.fillRect(w - 3, 0, 3, h); });
+      // يافطات محلات بأسامي مصرية
+      const SHOPS = ['صيدلية', 'سوبر ماركت', 'مخبز', 'كشري', 'فول وطعمية', 'موبايلات', 'حلاق', 'مكوجي', 'عصير قصب', 'أدوات منزلية', 'ملابس', 'بقالة', 'مطعم سمك', 'كافيه', 'عطارة', 'أحذية', 'نظارات', 'مكتبة'];
+      const SIGNC = ['#1d4f8a', '#b8202a', '#1f7a4a', '#f2b705', '#5a2a7a', '#222222', '#d8571e', '#0f6f7a'];
+      const signTex = cv(512, 1024, (g2) => {
+        for (let i = 0; i < 16; i++) {
+          const y = i * 64;
+          g2.fillStyle = SIGNC[i % SIGNC.length]; g2.fillRect(0, y, 512, 64);
+          g2.fillStyle = 'rgba(255,255,255,0.18)'; g2.fillRect(0, y, 512, 6);
+          g2.fillStyle = i % SIGNC.length === 3 ? '#1a1a1a' : '#ffffff';
+          g2.font = 'bold 40px Tahoma, Arial'; g2.textAlign = 'center'; g2.textBaseline = 'middle'; g2.direction = 'rtl';
+          g2.fillText(SHOPS[i % SHOPS.length], 256, y + 34);
+        }
+      });
+      const laundryTex = cv(256, 64, (g2) => {
+        g2.strokeStyle = '#444'; g2.lineWidth = 2; g2.beginPath(); g2.moveTo(0, 6); g2.lineTo(256, 6); g2.stroke();
+        const C = ['#e8e2d0', '#2a4a8a', '#b03a3a', '#f2c230', '#3d6b4a', '#ffffff', '#6a4a8a', '#d88aa0', '#1a1a1a'];
+        let x = 6;
+        while (x < 240) {
+          const w = 16 + Math.random() * 26, h = 22 + Math.random() * 34;
+          g2.fillStyle = C[Math.floor(Math.random() * C.length)];
+          if (Math.random() < 0.5) { g2.fillRect(x, 6, w, h); g2.fillRect(x - 5, 6, 5, h * 0.45); g2.fillRect(x + w, 6, 5, h * 0.45); } // قميص
+          else { g2.fillRect(x, 6, w, h * 0.35); g2.fillRect(x, 6, w * 0.42, h); g2.fillRect(x + w * 0.58, 6, w * 0.42, h); } // بنطلون
+          g2.fillStyle = '#c9a44a'; g2.fillRect(x + 2, 3, 3, 6); g2.fillRect(x + w - 5, 3, 3, 6);
+          x += w + 8 + Math.random() * 10;
+        }
+      });
+      const kioskTex = cv(256, 128, (g2) => {
+        g2.fillStyle = '#c62828'; g2.fillRect(0, 0, 256, 34);
+        g2.fillStyle = '#fff'; g2.font = 'bold 26px Tahoma, Arial'; g2.textAlign = 'center'; g2.direction = 'rtl'; g2.fillText('سجاير • حاجة ساقعة', 128, 26);
+        for (let r = 0; r < 3; r++) for (let i = 0; i < 12; i++) { g2.fillStyle = ['#e53935', '#fdd835', '#43a047', '#1e88e5', '#fb8c00', '#8e24aa'][(i + r * 2) % 6]; g2.fillRect(8 + i * 20, 42 + r * 28, 14, 22); }
+      });
+      const box = (w, h, dd, x, y, z) => new THREE.BoxGeometry(w, h, dd).translate(x, y, z);
+      // التندة مايلة لبره (+x)، ويافطة فوقها
+      const awn = new THREE.PlaneGeometry(1.25, 3.6).rotateX(-Math.PI / 2).rotateZ(-0.42).translate(0.6, 3.1, 0);
+      this.props = {
+        awning: awn,
+        awningMat: new THREE.MeshLambertMaterial({ map: stripes, side: THREE.DoubleSide }),
+        sign: box(0.22, 0.85, 3.7, 0.12, 3.95, 0),
+        signFace: (() => { const g3 = new THREE.PlaneGeometry(3.6, 0.78).rotateY(Math.PI / 2).translate(0.235, 3.95, 0); return g3; })(),
+        signMat: new THREE.MeshStandardMaterial({ map: signTex, emissive: 0xffffff, emissiveMap: signTex, emissiveIntensity: 0, roughness: 0.6 }),
+        signBack: new THREE.MeshLambertMaterial({ color: 0x2a2a2a }),
+        ac: new THREE.BufferGeometry().copy(box(0.32, 0.42, 0.68, 0.16, 0, 0)),
+        acMat: new THREE.MeshLambertMaterial({ color: 0xd6d3cb }),
+        laundry: new THREE.PlaneGeometry(1.9, 0.62).rotateY(Math.PI / 2).translate(0.62, 0.62, 0),
+        laundryMat: new THREE.MeshLambertMaterial({ map: laundryTex, transparent: true, alphaTest: 0.4, side: THREE.DoubleSide }),
+        bin: box(1.8, 1.15, 1.0, 0, 0.58, 0),
+        binMat: new THREE.MeshLambertMaterial({ color: 0x2e6b3a }),
+        trash: new THREE.SphereGeometry(0.35, 6, 4).scale(1, 0.5, 1),
+        trashMat: new THREE.MeshLambertMaterial({ color: 0x4a4a42, flatShading: true }),
+        kiosk: box(1.8, 2.3, 1.6, 0, 1.35, 0),
+        kioskFront: new THREE.PlaneGeometry(1.6, 0.8).rotateY(Math.PI / 2).translate(0.91, 1.95, 0),
+        kioskMat: new THREE.MeshLambertMaterial({ color: 0xd9d2c0 }),
+        kioskFrontMat: new THREE.MeshLambertMaterial({ map: kioskTex }),
+        kioskRoof: box(2.3, 0.08, 2.1, 0.15, 2.55, 0),
+        roofMat: new THREE.MeshLambertMaterial({ color: 0xb8202a }),
+        wireMat: new THREE.LineBasicMaterial({ color: 0x111111, transparent: true, opacity: 0.75 }),
+        puddleMat: new THREE.MeshStandardMaterial({ color: 0x0a0c10, roughness: 0.03, metalness: 0.0, transparent: true, opacity: 0, depthWrite: false, envMapIntensity: 2.5, polygonOffset: true, polygonOffsetFactor: -2 }),
+        palette: [0x1f7a4a, 0xb8202a, 0x1d4f8a, 0xd8571e, 0x7a5a2a, 0x2a2a2a, 0x0f6f7a, 0xc8a020],
+      };
+    }
     this.seaMat = new THREE.MeshPhongMaterial({ color: 0x3a8cc4, emissive: 0x15466e, specular: 0x406080, shininess: 25, side: THREE.DoubleSide });
     {
       // درابزين الكورنيش: أعمدة بيضا وفراغات
@@ -282,10 +347,15 @@ export class OsmCity {
     this.version = 0; // بيزيد لما شوارع جديدة تحمّل
   }
 
+  // يافطات المحلات بتنوّر بالليل
+  setNight(n) { this.props.signMat.emissiveIntensity = n * 0.9; }
+
   key(cx, cz) { return `${cx}_${cz}`; }
 
   // الشوارع بتلمع وتغمق وهي مبلولة
   setWet(v) {
+    this.props.puddleMat.opacity = Math.max(0, v - 0.15) * 0.95;
+    this.props.puddleMat.visible = v > 0.15;
     if (!this.roadMat.isMeshStandardMaterial) return;
     this.roadMat.roughness = 1 - v * 0.75;
     this.roadMat.color.setScalar(1 - v * 0.35);
@@ -338,6 +408,7 @@ export class OsmCity {
     }
     this.roads = this.roads.filter((r) => r.chunk !== k);
     this.bumps = this.bumps.filter((b) => b.chunk !== k);
+    this.pois = this.pois.filter((b) => b.chunk !== k);
     for (const [sk, sv] of this.signals) if (sv.chunk === k) this.signals.delete(sk);
     this.version++;
     this.chunks.delete(k);
@@ -455,6 +526,7 @@ export class OsmCity {
     const B = (m) => (buf[m] ||= { p: [], n: [], u: [], c: [] });
     const roof = [], roofCol = [];
     const domes = [], minarets = [], tanks = [], balconies = [], roofRooms = [], dishes = [];
+    const shopBays = [], acUnits = [], laundry = [];
     const col = new THREE.Color();
     const WALLS = [0xece2cf, 0xf2e6c8, 0xe6d3b3, 0xddd5c8, 0xefdccb, 0xe9e4d6, 0xd9cdb6, 0xf3ecdd, 0xe8d9bc, 0xcfc6b5];
     const v1 = d.b.length && d.b[0].length >= 3 && this.index.version >= 2;
@@ -570,6 +642,30 @@ export class OsmCity {
             }
           }
         }
+        // المحلات: تندة + يافطة لكل محل، والتكييفات على الحيطان
+        if (len > 3.5 && shopBays.length < 1400 * 4) {
+          const mx = (ax + bx) / 2, mz = (az + bz) / 2;
+          const out = nx * (mx - cx) + nz * (mz - cz) >= 0 ? 1 : -1;
+          const ox = nx * out, oz = nz * out, yaw = Math.atan2(oz, ox);
+          if (shopsBand) {
+            for (let k = 0; (k + 1) * 4.3 <= len + 0.4; k++) {
+              const s0 = ((k + 0.5) * 4.3) / len;
+              shopBays.push(ax + (bx - ax) * s0, az + (bz - az) * s0, yaw, hash(Math.round(mx * 5) + k * 131));
+            }
+          }
+          if ((facade === 'residential' || facade === 'modern') && floors >= 2 && acUnits.length < 3000 * 4) {
+            const fh = h / floors;
+            for (let k = 0; (k + 0.5) * 2.9 < len - 0.6; k++) {
+              const s0 = ((k + 0.5) * 2.9 + 1.2) / len;
+              if (s0 > 0.97) break;
+              for (let f = shopsBand ? 2 : 1; f < floors; f++) {
+                const hh = hash(k * 977 + f * 131 + Math.round(mx * 3));
+                if (hh > 0.16) continue;
+                acUnits.push(ax + (bx - ax) * s0, f * fh + 1.9, az + (bz - az) * s0, yaw);
+              }
+            }
+          }
+        }
       }
       // السطح
       const contour = [];
@@ -596,6 +692,10 @@ export class OsmCity {
         if (seed2 > 0.35) dishes.push(cx + (seed2 - 0.5) * minDim * 0.5, h, cz + (seed - 0.5) * minDim * 0.5, seed * 6);
       }
       if (isCenter) centerPoly = { p, cx, cz, h };
+      if ((type === T_HOSP || type === T_MOSQUE || type === T_SCHOOL) && area > 80) {
+        const nm = d.bn && d.bn[idx];
+        this.pois.push({ kind: type === T_HOSP ? 'hospital' : type === T_MOSQUE ? 'mosque' : 'school', x: cx, z: cz, name: typeof nm === 'string' && nm.length > 1 ? nm : '', chunk: k });
+      }
       c.polys.push({ p, minx, minz, maxx, maxz });
     }
     for (const [mat, o] of Object.entries(buf)) {
@@ -662,6 +762,10 @@ export class OsmCity {
       slab.receiveShadow = true;
       detail.add(slab, rail);
     }
+    for (let i = 0; i < balconies.length; i += 5) {
+      if (hash(Math.round(balconies[i] * 7) ^ Math.round(balconies[i + 2] * 11) ^ Math.round(balconies[i + 1])) < 0.28) laundry.push(balconies[i], balconies[i + 1], balconies[i + 2], balconies[i + 3]);
+    }
+    this.buildingProps(detail, shopBays, acUnits, laundry);
     if (roofRooms.length) {
       const n4 = roofRooms.length / 4;
       const rm = new THREE.InstancedMesh(this.balc.room, this.balc.roomMat, n4);
@@ -702,6 +806,7 @@ export class OsmCity {
     const asphalt = [], walk = [], white = [], yellow = [];
     const curbs = { p: [], u: [], n: [] }, plainCurbs = { p: [], u: [], n: [] };
     const lamps = [], lights = [], signsOne = [], signsNo = [], parked = [], cafes = [], nameSigns = [], trees = [], bumpsHere = [];
+    const bins = [], kiosks = [], wires = [], puddles = [];
     const parkedCells = new Set();
     // العربية الراكنة متدخلش في مبنى
     const onAnyBuilding = (x, z) => c.polys.some((pl) => x > pl.minx - 1 && x < pl.maxx + 1 && z > pl.minz - 1 && z < pl.maxz + 1 && (() => {
@@ -922,6 +1027,52 @@ export class OsmCity {
           }
         }
       }
+      // صناديق زبالة خضرا جنب أول الشارع، وأكشاك على الشوارع الكبيرة
+      if (type >= 3 && type <= 6 && L > 20) {
+        for (const [a2, b2] of spans) {
+          if (b2 - a2 < 14) continue;
+          const h = hash(Math.round(p[0] * 13) ^ Math.round(a2 * 7) ^ 919);
+          if (h < 0.4) {
+            const q = at(p, a2 + 4), side = h < 0.2 ? 1 : -1, off = (w / 2 + 0.9) * side;
+            const x = q.x + -q.uz * off, z = q.z + q.ux * off;
+            if (!onAnyBuilding(x, z)) bins.push(x, z, Math.atan2(q.uz, q.ux), h);
+          }
+          if (type <= 4) for (let s2 = a2 + 30; s2 < b2 - 20; s2 += 140) {
+            const hk = hash(Math.round(s2 * 3) ^ Math.round(p[1] * 5) ^ 4711);
+            if (hk > 0.45) continue;
+            const side = hk < 0.22 ? 1 : -1, q = at(p, s2), off = (w / 2 + 1.5) * side;
+            const x = q.x + -q.uz * off, z = q.z + q.ux * off;
+            if (!onAnyBuilding(x, z)) {
+              kiosks.push(x, z, Math.atan2(q.ux * side, -q.uz * side) + Math.PI);
+              c.polys.push({ p: new Float32Array([x - 1, z - 1, x + 1, z - 1, x + 1, z + 1, x - 1, z + 1]), minx: x - 1, maxx: x + 1, minz: z - 1, maxz: z + 1 });
+            }
+          }
+        }
+      }
+      // سلوك كهربا وتليفون معدّية الشوارع الضيقة (بتتدلّى شوية)
+      if (type >= 5 && type <= 6 && L > 25) {
+        for (let s2 = 10; s2 < L - 8; s2 += 22) {
+          const hw2 = hash(Math.round(s2 * 11) ^ Math.round(p[0] * 7) ^ 333);
+          if (hw2 > 0.55) continue;
+          const q = at(p, s2), off = w / 2 + 2.7, y0 = 6 + hw2 * 5, skew = (hw2 - 0.25) * 6;
+          const x0 = q.x - -q.uz * off, z0 = q.z - q.ux * off, x1 = q.x + -q.uz * off + q.ux * skew, z1 = q.z + q.ux * off + q.uz * skew;
+          let px0 = x0, pz0 = z0, py0 = y0;
+          for (let sg = 1; sg <= 6; sg++) {
+            const tt = sg / 6, px1 = x0 + (x1 - x0) * tt, pz1 = z0 + (z1 - z0) * tt, py1 = y0 - Math.sin(tt * Math.PI) * 0.9;
+            wires.push(px0, py0, pz0, px1, py1, pz1);
+            px0 = px1; pz0 = pz1; py0 = py1;
+          }
+        }
+      }
+      // بِرك مية على جنب الأسفلت (بتبان في المطر)
+      if (type >= 3 && type <= 6 && L > 15) {
+        for (let s2 = 6; s2 < L - 4; s2 += 13) {
+          const hp = hash(Math.round(s2 * 5) ^ Math.round(p[1] * 3) ^ 2024);
+          if (hp > 0.4) continue;
+          const o = (hp < 0.2 ? 1 : -1) * (w / 2 - 0.9 - hp * 2);
+          ribbon(puddles, p, o - 0.6 - hp * 2, o + 0.6, ya + 0.006, s2, s2 + 1.5 + hp * 5);
+        }
+      }
       // أعمدة نور على الرصيف كل ٣٠ م، بالتبادل يمين وشمال
       if (type <= 4) {
         let side = 1;
@@ -988,6 +1139,7 @@ export class OsmCity {
     this.furniture(detail, lamps, lights, signsOne, signsNo);
     this.streetDetails(detail, nameSigns, trees, bumpsHere);
     this.life(detail, parked, cafes);
+    this.streetProps(detail, g, bins, kiosks, wires, puddles);
     if (centerPoly) this.placeCenter(g, centerPoly);
 
     // ---------- الحدائق ----------
@@ -1093,6 +1245,120 @@ export class OsmCity {
       }
       for (const m of [tables, chairs, torsos, heads, awnings]) m.castShadow = true;
       g.add(tables, chairs, torsos, heads, awnings, cats);
+    }
+  }
+
+  // تندات ويافطات المحلات + تكييفات + غسيل منشور
+  buildingProps(g, bays, acs, laundry) {
+    const P = this.props, d = new THREE.Object3D(), col = new THREE.Color();
+    const n = bays.length / 4;
+    if (n) {
+      const awn = new THREE.InstancedMesh(P.awning, P.awningMat, n);
+      const sign = new THREE.InstancedMesh(P.sign, P.signBack, n);
+      // كل يافطة بتاخد سطر من الأطلس (١٦ اسم)
+      const face = new THREE.InstancedMesh(P.signFace.clone(), P.signMat, n);
+      const off = new Float32Array(n);
+      for (let i = 0; i < n; i++) {
+        const [x, z, yaw, h] = [bays[i * 4], bays[i * 4 + 1], bays[i * 4 + 2], bays[i * 4 + 3]];
+        d.position.set(x, 0, z);
+        d.rotation.set(0, -yaw, 0);
+        d.scale.set(1, 1, 1);
+        d.updateMatrix();
+        sign.setMatrixAt(i, d.matrix);
+        face.setMatrixAt(i, d.matrix);
+        off[i] = Math.floor(h * 16);
+        if (h < 0.78) {
+          awn.setMatrixAt(i, d.matrix);
+          awn.setColorAt(i, col.setHex(P.palette[Math.floor(h * 97) % P.palette.length]));
+        } else {
+          d.scale.set(0, 0, 0); d.updateMatrix(); awn.setMatrixAt(i, d.matrix);
+          awn.setColorAt(i, col.setHex(0xffffff));
+        }
+      }
+      // UV كل يافطة بيتنقل لسطر الاسم بتاعها
+      face.geometry.setAttribute('row', new THREE.InstancedBufferAttribute(off, 1));
+      if (!P.signMat.userData.patched) {
+        P.signMat.userData.patched = true;
+        P.signMat.onBeforeCompile = (sh) => {
+          sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute float row;')
+            .replace('#include <uv_vertex>', '#include <uv_vertex>\n#ifdef USE_MAP\nvMapUv = vec2(vMapUv.x, (vMapUv.y + 15.0 - row) / 16.0);\n#endif\n#ifdef USE_EMISSIVEMAP\nvEmissiveMapUv = vec2(vEmissiveMapUv.x, (vEmissiveMapUv.y + 15.0 - row) / 16.0);\n#endif');
+        };
+      }
+      awn.castShadow = sign.castShadow = true;
+      g.add(awn, sign, face);
+    }
+    const nA = acs.length / 4;
+    if (nA) {
+      const ac = new THREE.InstancedMesh(P.ac, P.acMat, nA);
+      for (let i = 0; i < nA; i++) {
+        d.position.set(acs[i * 4], acs[i * 4 + 1], acs[i * 4 + 2]);
+        d.rotation.set(0, -acs[i * 4 + 3], 0);
+        d.scale.set(1, 1, 1);
+        d.updateMatrix();
+        ac.setMatrixAt(i, d.matrix);
+      }
+      g.add(ac);
+    }
+    const nL = laundry.length / 4;
+    if (nL) {
+      const lm = new THREE.InstancedMesh(P.laundry, P.laundryMat, nL);
+      for (let i = 0; i < nL; i++) {
+        d.position.set(laundry[i * 4], laundry[i * 4 + 1], laundry[i * 4 + 2]);
+        d.rotation.set(0, -laundry[i * 4 + 3], 0);
+        d.scale.set(1, 1, (i % 3) ? 1 : -1);
+        d.updateMatrix();
+        lm.setMatrixAt(i, d.matrix);
+      }
+      g.add(lm);
+    }
+  }
+
+  // صناديق زبالة، أكشاك، سلوك، بِرك
+  streetProps(g, root, bins, kiosks, wires, puddles) {
+    const P = this.props, d = new THREE.Object3D();
+    const nB = bins.length / 4;
+    if (nB) {
+      const bm = new THREE.InstancedMesh(P.bin, P.binMat, nB);
+      const tm = new THREE.InstancedMesh(P.trash, P.trashMat, nB * 3);
+      for (let i = 0; i < nB; i++) {
+        const [x, z, yaw, h] = bins.slice(i * 4, i * 4 + 4);
+        d.position.set(x, 0.2, z); d.rotation.set(0, -yaw, 0); d.scale.set(1, 1, 1); d.updateMatrix();
+        bm.setMatrixAt(i, d.matrix);
+        for (let k = 0; k < 3; k++) {
+          const a = h * 40 + k * 2.1;
+          d.position.set(x + Math.cos(a) * (1.1 + k * 0.2), 0.25, z + Math.sin(a) * (1.1 + k * 0.2));
+          d.scale.setScalar(0.6 + hash(i * 7 + k) * 0.8);
+          d.updateMatrix();
+          tm.setMatrixAt(i * 3 + k, d.matrix);
+        }
+      }
+      bm.castShadow = true;
+      g.add(bm, tm);
+    }
+    const nK = kiosks.length / 3;
+    if (nK) {
+      const parts = [[P.kiosk, P.kioskMat], [P.kioskFront, P.kioskFrontMat], [P.kioskRoof, P.roofMat]].map(([geo, mat]) => new THREE.InstancedMesh(geo, mat, nK));
+      for (let i = 0; i < nK; i++) {
+        d.position.set(kiosks[i * 3], 0.2, kiosks[i * 3 + 1]); d.rotation.set(0, -kiosks[i * 3 + 2], 0); d.scale.set(1, 1, 1); d.updateMatrix();
+        for (const m of parts) m.setMatrixAt(i, d.matrix);
+      }
+      parts[0].castShadow = parts[2].castShadow = true;
+      g.add(...parts);
+    }
+    if (wires.length) {
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(wires, 3));
+      g.add(new THREE.LineSegments(geo, P.wireMat));
+    }
+    if (puddles.length) {
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(puddles, 3));
+      const nrm = new Float32Array(puddles.length);
+      for (let i = 1; i < nrm.length; i += 3) nrm[i] = 1;
+      geo.setAttribute('normal', new THREE.BufferAttribute(nrm, 3));
+      const m = new THREE.Mesh(geo, P.puddleMat);
+      m.renderOrder = 1;
+      root.add(m);
     }
   }
 
@@ -1487,7 +1753,118 @@ export class OsmCity {
     return out;
   }
 
-  drawMinimap(g, S, player, target, door, landmarks) {
+  // ---------- GPS: شبكة الشوارع وأقصر طريق (A*) ----------
+  graph() {
+    if (this._graph && this._graph.version === this.version) return this._graph;
+    const ids = new Map(), xs = [], zs = [], adj = [];
+    const Q = 1.5;
+    const id = (x, z) => {
+      const key = Math.round(x / Q) * 1000003 + Math.round(z / Q);
+      let i = ids.get(key);
+      if (i === undefined) { i = xs.length; ids.set(key, i); xs.push(x); zs.push(z); adj.push([]); }
+      return i;
+    };
+    for (const r of this.roads) {
+      if (r.type > 6) continue;
+      const p = r.p;
+      let prev = id(p[0], p[1]);
+      for (let i = 2; i < p.length; i += 2) {
+        const cur = id(p[i], p[i + 1]);
+        if (cur === prev) continue;
+        const len = Math.hypot(p[i] - p[i - 2], p[i + 1] - p[i - 1]);
+        const cost = len * (r.type <= 2 ? 0.8 : r.type <= 4 ? 0.9 : r.type === 6 ? 1.3 : 1); // الشوارع الكبيرة أسرع
+        adj[prev].push(cur, cost);
+        adj[cur].push(prev, r.oneway ? cost * 6 : cost); // عكس الاتجاه الواحد: آخر حل
+        prev = cur;
+      }
+    }
+    // شبكة مكانية (خلية ١٠ م) + لحام أطراف الشوارع اللي اتقطعت بين القطع
+    const cell = new Map();
+    const ck = (x, z) => Math.floor(x / 10) * 100003 + Math.floor(z / 10);
+    for (let i = 0; i < xs.length; i++) { const k = ck(xs[i], zs[i]); if (!cell.has(k)) cell.set(k, []); cell.get(k).push(i); }
+    const near = (x, z, R, skip) => {
+      let best = -1, bd = R * R;
+      const r = Math.ceil(R / 10);
+      const cx = Math.floor(x / 10), cz = Math.floor(z / 10);
+      for (let a = -r; a <= r; a++) for (let b = -r; b <= r; b++) {
+        for (const j of cell.get((cx + a) * 100003 + cz + b) || []) {
+          if (j === skip) continue;
+          const d = (xs[j] - x) ** 2 + (zs[j] - z) ** 2;
+          if (d < bd) { bd = d; best = j; }
+        }
+      }
+      return best;
+    };
+    for (let i = 0; i < xs.length; i++) {
+      if (adj[i].length > 2) continue;
+      const j = near(xs[i], zs[i], 6, i);
+      if (j >= 0 && !adj[i].includes(j)) { const d = Math.hypot(xs[j] - xs[i], zs[j] - zs[i]) + 0.5; adj[i].push(j, d); adj[j].push(i, d); }
+    }
+    this._graph = { version: this.version, xs, zs, adj, near };
+    return this._graph;
+  }
+
+  // بيرجّع نقط الطريق [x,z,...] من مكان لمكان
+  route(fx, fz, tx, tz) {
+    const G = this.graph();
+    const { xs, zs, adj } = G;
+    if (!xs.length) return null;
+    const s = G.near(fx, fz, 60, -1);
+    // لو الهدف برّه الحتت المحمّلة: أقرب نقطة ليه
+    let t = G.near(tx, tz, 80, -1);
+    if (t < 0) {
+      let bd = Infinity;
+      for (let i = 0; i < xs.length; i += 3) { const d = (xs[i] - tx) ** 2 + (zs[i] - tz) ** 2; if (d < bd) { bd = d; t = i; } }
+    }
+    if (s < 0 || t < 0) return null;
+    const n = xs.length;
+    const gS = new Float64Array(n).fill(Infinity), from = new Int32Array(n).fill(-1), done = new Uint8Array(n);
+    // كومة ثنائية بسيطة
+    const heap = [], hf = [];
+    const push = (i, f) => {
+      heap.push(i); hf.push(f);
+      let k = heap.length - 1;
+      while (k > 0) { const p2 = (k - 1) >> 1; if (hf[p2] <= hf[k]) break; [heap[p2], heap[k]] = [heap[k], heap[p2]]; [hf[p2], hf[k]] = [hf[k], hf[p2]]; k = p2; }
+    };
+    const pop = () => {
+      const top = heap[0], lastI = heap.pop(), lastF = hf.pop();
+      if (heap.length) {
+        heap[0] = lastI; hf[0] = lastF;
+        let k = 0;
+        for (;;) {
+          const l = k * 2 + 1, r = l + 1;
+          let m = k;
+          if (l < heap.length && hf[l] < hf[m]) m = l;
+          if (r < heap.length && hf[r] < hf[m]) m = r;
+          if (m === k) break;
+          [heap[m], heap[k]] = [heap[k], heap[m]]; [hf[m], hf[k]] = [hf[k], hf[m]]; k = m;
+        }
+      }
+      return top;
+    };
+    gS[s] = 0;
+    push(s, 0);
+    let steps = 0;
+    while (heap.length && steps++ < 200000) {
+      const u = pop();
+      if (done[u]) continue;
+      done[u] = 1;
+      if (u === t) break;
+      const a = adj[u];
+      for (let k = 0; k < a.length; k += 2) {
+        const v = a[k], ng = gS[u] + a[k + 1];
+        if (ng < gS[v]) { gS[v] = ng; from[v] = u; push(v, ng + Math.hypot(xs[v] - xs[t], zs[v] - zs[t]) * 0.8); }
+      }
+    }
+    if (!done[t]) return null;
+    const out = [];
+    for (let v = t; v >= 0; v = from[v]) out.push(xs[v], zs[v]);
+    const pts = [];
+    for (let i = out.length - 2; i >= 0; i -= 2) pts.push(out[i], out[i + 1]);
+    return pts;
+  }
+
+  drawMinimap(g, S, player, target, door, landmarks, extra = {}) {
     const half = S / 2, k = S / 2 / 350;
     g.save();
     g.clearRect(0, 0, S, S);
@@ -1516,9 +1893,28 @@ export class OsmCity {
       g.fillStyle = color; g.strokeStyle = '#fff'; g.lineWidth = 2;
       g.beginPath(); g.arc(px, py, r, 0, Math.PI * 2); g.fill(); g.stroke();
     };
+    // منطقة البحث (دايرة)
+    if (extra.search) {
+      g.fillStyle = 'rgba(255,138,31,0.22)'; g.strokeStyle = 'rgba(255,138,31,0.9)'; g.lineWidth = 2;
+      g.beginPath(); g.arc(half + (extra.search.x - player.x) * k, half + (extra.search.z - player.z) * k, extra.search.r * k, 0, Math.PI * 2); g.fill(); g.stroke();
+    }
+    // خط الـGPS (بنفسجي زي الألعاب)
+    const rt = extra.route;
+    if (rt && rt.length >= 4) {
+      for (const [wid, colr] of [[7, 'rgba(40,10,60,0.6)'], [4.2, '#c15cff']]) {
+        g.strokeStyle = colr; g.lineWidth = wid; g.lineJoin = 'round';
+        g.beginPath();
+        g.moveTo(half + (player.x - player.x) * k, half);
+        for (let i = 0; i < rt.length; i += 2) g.lineTo(half + (rt[i] - player.x) * k, half + (rt[i + 1] - player.z) * k);
+        if (target) g.lineTo(half + (target.x - player.x) * k, half + (target.z - player.z) * k);
+        g.stroke();
+      }
+    }
+    // نقط الهدف الصغيرة (صيدلية، مستشفى...)
     for (const l of landmarks) dot(l.x, l.z, 'rgba(242,194,48,0.7)', 2.5);
+    for (const o of extra.pins || []) dot(o.x, o.z, o.color, 4.5);
     dot(door.x, door.z, '#22e0a8', 5);
-    if (target) dot(target.x, target.z, '#ff8a1f', 7);
+    if (target && !extra.hideTarget) dot(target.x, target.z, extra.targetColor || '#ff8a1f', 7);
     g.translate(half, half);
     g.rotate(player.heading);
     g.fillStyle = '#fff';
